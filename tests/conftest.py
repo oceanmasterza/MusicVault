@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from musicvault.core.config import AppConfig, default_config
+from musicvault.core.config import AppConfig, PipelineConfig
 from musicvault.core.container import Container
 from musicvault.core.paths import AppPaths, get_app_paths
 
@@ -28,8 +28,10 @@ def app_paths(app_data_dir: Path) -> AppPaths:
 
 @pytest.fixture
 def app_config() -> AppConfig:
-    """The built-in default configuration."""
-    return default_config()
+    """The built-in default configuration, with pipeline pools pinned to a
+    single worker so container/bootstrap tests do not spawn a full
+    `ProcessPoolExecutor` farm on every `Container.bootstrap` call."""
+    return AppConfig(pipeline=PipelineConfig(hash_worker_processes=1))
 
 
 @pytest.fixture

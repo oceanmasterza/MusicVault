@@ -48,10 +48,12 @@ def test_each_bootstrap_call_creates_an_independent_event_bus(
     app_paths: AppPaths, app_config: AppConfig
 ) -> None:
     first = Container.bootstrap(paths=app_paths, config=app_config)
+    first_bus = first.event_bus
+    first.close()
+
     second = Container.bootstrap(paths=app_paths, config=app_config)
 
-    assert first.event_bus is not second.event_bus
-    first.close()
+    assert first_bus is not second.event_bus
     second.close()
 
 

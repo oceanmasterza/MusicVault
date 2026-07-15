@@ -28,10 +28,12 @@ def test_bootstrap_writes_rotated_log_files(tmp_path: Path) -> None:
 
 def test_bootstrap_is_idempotent_across_repeated_calls(tmp_path: Path) -> None:
     first = bootstrap(base_dir_override=tmp_path, console_logging=False)
+    first_config = first.config
+    first.close()
+
     second = bootstrap(base_dir_override=tmp_path, console_logging=False)
 
-    assert first.config == second.config
-    first.close()
+    assert first_config == second.config
     second.close()
 
 

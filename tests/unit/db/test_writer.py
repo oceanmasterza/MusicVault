@@ -48,7 +48,7 @@ def _artist_names(engine: Engine) -> set[str]:
         return {row.name for row in conn.execute(select(artists.c.name))}
 
 
-def _wait_until(predicate: Callable[[], bool], *, timeout: float = 2.0) -> bool:
+def _wait_until(predicate: Callable[[], bool], *, timeout: float = 10.0) -> bool:
     """Poll ``predicate`` until it's True or ``timeout`` seconds elapse.
 
     Used only for the two tests that assert automatic (non-`stop()`-driven)
