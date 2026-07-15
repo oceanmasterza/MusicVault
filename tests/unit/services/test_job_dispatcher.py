@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import os
 import time
 from collections.abc import Callable, Iterator
+from concurrent.futures import Future
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 import pytest
@@ -22,11 +23,29 @@ from musicvault.workers.cpu.hash_worker import HashWorker
 from musicvault.workers.io.scanner_worker import ScannerWorker
 
 _NOW = datetime(2026, 7, 15, tzinfo=UTC)
+_POLL_TIMEOUT_SECONDS = 5.0
 
-# GitHub Actions Windows runners spawn `ProcessPoolExecutor` workers much
-# more slowly than a local dev machine (cold interpreter boot + re-imports),
-# so allow a longer window there while keeping local feedback snappy.
-_POLL_TIMEOUT_SECONDS = 120.0 if os.environ.get("GITHUB_ACTIONS") == "true" else 20.0
+
+class _SynchronousExecutor:
+    """Test stand-in for `ProcessPoolExecutor`.
+
+    Runs each submitted callable in the caller's thread so these unit tests
+    exercise the dispatcher's submit/done-callback wiring without spawning
+    real worker processes — which is slow and flaky on GitHub Actions
+    Windows runners. :func:`~musicvault.workers.cpu.hash_worker.compute_hash`
+    itself is covered separately in ``test_hash_worker.py``.
+    """
+
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
+        future: Future[Any] = Future()
+        try:
+            future.set_result(fn(*args, **kwargs))
+        except Exception as exc:
+            future.set_exception(exc)
+        return future
+
+    def shutdown(self, *, wait: bool = True, cancel_futures: bool = False) -> None:
+        pass
 
 
 @pytest.fixture
@@ -47,6 +66,10 @@ def dispatcher(
         claim_batch_size=10,
         poll_interval_seconds=0.05,
     )
+    # Swap out the real process pool before any work is submitted.
+    real_hash_pool = disp._hash_pool  # noqa: SLF001
+    disp._hash_pool = _SynchronousExecutor()  # noqa: SLF001
+    real_hash_pool.shutdown(wait=False, cancel_futures=True)
     yield disp
     disp.stop()
 
@@ -93,18 +116,17 @@ def test_run_cycle_dispatches_a_scan_directory_job_via_the_thread_pool(
 
     futures = dispatcher.run_cycle()
     assert len(futures) == 1
-    futures[0].result(timeout=_POLL_TIMEOUT_SECONDS)  # ThreadPool: no callback race
+    futures[0].result(timeout=_POLL_TIMEOUT_SECONDS)
 
     job = job_repo.get(job_id)
     assert job is not None
     assert job.status is JobStatus.COMPLETED
 
 
-def test_run_cycle_dispatches_a_hash_file_job_via_the_process_pool(
+def test_run_cycle_dispatches_a_hash_file_job_and_runs_its_done_callback(
     dispatcher: JobDispatcher,
     job_queue: JobQueueService,
     job_repo: JobRepository,
-    database_writer: DatabaseWriter,
     library_id: UUID,
     track_id: UUID,
     tmp_path: Path,
@@ -120,14 +142,11 @@ def test_run_cycle_dispatches_a_hash_file_job_via_the_process_pool(
 
     futures = dispatcher.run_cycle()
     assert len(futures) == 1
-    futures[0].result(timeout=_POLL_TIMEOUT_SECONDS)  # wait for compute_hash in the worker process
+    futures[0].result(timeout=_POLL_TIMEOUT_SECONDS)
 
-    # handle_result runs on the pool's callback thread after the future
-    # completes — usually fast, but give CI a little slack anyway.
-    assert _wait_until(
-        lambda: job_repo.get(job_id).status is JobStatus.COMPLETED,  # type: ignore[union-attr]
-        timeout=min(_POLL_TIMEOUT_SECONDS, 30.0),
-    )
+    job = job_repo.get(job_id)
+    assert job is not None
+    assert job.status is JobStatus.COMPLETED
 
 
 def test_run_cycle_promotes_due_retries_before_claiming(
@@ -208,8 +227,6 @@ def test_handle_hash_result_marks_the_job_failed_if_handle_result_raises(
     library_id: UUID,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from concurrent.futures import Future
-
     job_id = job_queue.enqueue(JobType.HASH_FILE, library_id, {}, now=_NOW)
     job = job_repo.get(job_id)
     assert job is not None
