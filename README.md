@@ -2,7 +2,7 @@
 
 **Lightroom for Music** — a professional, open-source Windows application for managing large music libraries with self-hosted media servers.
 
-[![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.14](https://img.shields.io/badge/python-3.14-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows-lightgrey.svg)]()
 
@@ -49,7 +49,7 @@ python -m musicvault  # MusicVault 0.1.0
 
 | Layer | Technology |
 |-------|------------|
-| Language | Python 3.13 |
+| Language | Python 3.14 |
 | GUI | PySide6 (Qt6) |
 | Database | SQLite + **SQLAlchemy Core** (not ORM) |
 | Identities | **UUID v7** (all entities) |

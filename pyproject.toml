@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Lightroom for Music — professional music library management for Navidrome, Jellyfin, Plex, and self-hosted media servers."
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 authors = [{ name = "MusicVault Contributors" }]
 keywords = ["music", "library", "navidrome", "jellyfin", "plex", "metadata", "musicbrainz"]
 classifiers = [
@@ -16,7 +16,7 @@ classifiers = [
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: MIT License",
     "Operating System :: Microsoft :: Windows",
-    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Multimedia :: Sound/Audio :: Editors",
 ]
 
@@ -59,7 +59,7 @@ musicvault = "musicvault.__main__:main"
 where = ["src"]
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py314"
 line-length = 100
 src = ["src", "tests"]
 
@@ -74,10 +74,10 @@ ignore = [
 
 [tool.black]
 line-length = 100
-target-version = ["py313"]
+target-version = ["py314"]
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 strict = true
 packages = ["musicvault"]
 mypy_path = "src"

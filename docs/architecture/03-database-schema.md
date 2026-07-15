@@ -153,7 +153,7 @@ Stores computed hashes and fingerprints. Workers skip recomputation when all ide
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `track_id` | TEXT | PK, FK → tracks | |
+| `track_id` | BLOB(16) | PK, FK → tracks | |
 | `content_hash_sha256` | TEXT | NOT NULL | Full file hash |
 | `fingerprint_data` | BLOB | NULL | Chromaprint bytes |
 | `fingerprint_duration` | REAL | NULL | Seconds |
@@ -314,8 +314,8 @@ Central job queue — the backbone of all background processing.
 
 | Column | Type | Constraints |
 |--------|------|-------------|
-| `group_id` | TEXT | PK, FK → duplicate_groups |
-| `track_id` | TEXT | PK, FK → tracks |
+| `group_id` | BLOB(16) | PK, FK → duplicate_groups |
+| `track_id` | BLOB(16) | PK, FK → tracks |
 | `quality_score` | INTEGER | NOT NULL |
 | `is_best` | BOOLEAN | DEFAULT FALSE |
 | `zone` | TEXT | NOT NULL | Zone at detection time |
@@ -369,7 +369,9 @@ Central job queue — the backbone of all background processing.
 
 ## Artwork, Plugins, Statistics
 
-Structure unchanged from v1 except all PKs/FKs are UUID TEXT. See v1 schema for column details.
+Structure unchanged from v1 except all PKs/FKs are UUID v7 stored as **BLOB(16)**
+(see [12-pipeline-engine-v3.md](12-pipeline-engine-v3.md#uuid-storage-v7-as-blob16)).
+See v1 schema for column details.
 
 Additional tables:
 - `artwork`, `track_artwork`, `album_artwork`
@@ -381,7 +383,7 @@ Additional tables:
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `id` | TEXT | UUID v7 |
+| `id` | BLOB(16) | UUID v7 |
 | `library_id` | BLOB(16) | FK |
 | `plugin_id` | TEXT | e.g. `navidrome` |
 | `server_url` | TEXT | |
@@ -409,7 +411,7 @@ PRAGMAS = [
 ## Migration Strategy
 
 - **Tool**: Alembic (works with SQLAlchemy Core `MetaData`)
-- **Location**: `src/musicvault/infrastructure/database/migrations/versions/`
+- **Location**: `src/musicvault/db/migrations/versions/`
 - **First migration**: `001_initial_schema_v2.py`
 - **Auto-run**: On startup; backup to `backups/auto/` before applying
 

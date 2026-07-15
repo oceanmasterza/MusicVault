@@ -317,7 +317,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.14"
       - run: pip install -e ".[dev]"
       - run: python tests/fixtures/generate_audio.py
       - run: pytest --cov=musicvault --cov-report=xml

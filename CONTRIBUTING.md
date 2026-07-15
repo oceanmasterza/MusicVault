@@ -21,7 +21,9 @@ code.
 
 ## Development Setup
 
-Requires Python 3.13+.
+Requires Python 3.14+ (needed for the standard library's native `uuid.uuid7()`,
+used to generate every primary key in the schema — see
+[Database Schema](docs/architecture/03-database-schema.md)).
 
 ```powershell
 git clone https://github.com/musicvault/musicvault.git

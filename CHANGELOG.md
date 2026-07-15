@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Corrected minimum Python version from 3.13 to 3.14** across `pyproject.toml`, both
+  CI workflows, and all architecture docs. The original architecture notes incorrectly
+  claimed `uuid.uuid7()` was added to the standard library in Python 3.12; verified
+  against the official CPython changelog that it was actually added in **3.14**.
+  Since UUIDv7 generation is used for every primary key in the entire database schema
+  (Phase 2), this was caught and fixed *before* writing any database code, rather than
+  after a confusing CI-only failure (local dev already had 3.14 installed, so the bug
+  would not have reproduced locally). Also fixed a related inconsistency in
+  `03-database-schema.md` where a few tables (`file_identity`, `duplicate_members`,
+  `media_server_state`) still showed `TEXT` UUID columns instead of `BLOB(16)`.
+
 ### Added
 
 - **Phase 1 project scaffold** — first runnable application code:

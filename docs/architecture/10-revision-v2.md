@@ -3,6 +3,12 @@
 > **Status**: Approved design direction. Supersedes v1 patterns where they conflict.
 > **Date**: 2026-07-15
 > **Prerequisite for**: Phase 1 scaffold
+>
+> **Superseded in part by v3**: [12-pipeline-engine-v3.md](12-pipeline-engine-v3.md) is
+> the current authoritative document. In particular, illustrative code below still
+> shows UUIDs as `Text` and paths under `infrastructure/database/` — both are v2-era
+> and no longer accurate. UUIDs are `BLOB(16)` (see v3 §"UUID Storage"), and the
+> database layer lives under `db/` (see [02-folder-layout.md](02-folder-layout.md)).
 
 This document is the authoritative revision of the MusicVault architecture. It incorporates scalability review findings, the asynchronous job pipeline, UUID identities, confidence scoring, the rules engine, review queue, staging library, and expanded media server support.
 
@@ -414,7 +420,8 @@ Domain entities never import SQLAlchemy. Mapping happens only in repositories.
 | v7 (time-ordered) | Yes | Yes | Good (append-mostly) | **Selected** |
 | ULID | Yes | Yes | Good | Alternative; less standard in Python |
 
-Python 3.13+: use `uuid.uuid7()` (added in 3.12).
+Python 3.14+: use `uuid.uuid7()` (added to the standard library in 3.14, not 3.12 —
+verified against the official changelog; see [07-roadmap.md](07-roadmap.md) Phase 1 notes).
 
 ### Where UUIDs Are Used
 

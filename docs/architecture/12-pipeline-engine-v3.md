@@ -293,7 +293,13 @@ The recommendation specifies UUIDv4. We keep **v7** because:
 - v7 is time-ordered → better B-tree insert locality for append-heavy scan workloads
 - v7 embeds timestamp → useful for debugging job/entity creation order
 
-v4's only advantage is wider library support in older code; Python 3.12+ has `uuid.uuid7()` natively.
+v4's only advantage is wider library support in older code. Python's standard library
+gained `uuid.uuid7()` natively in **3.14** (verified against the official CPython
+changelog — an earlier draft of this document incorrectly said 3.12). MusicVault now
+requires Python **3.14+** for exactly this reason: it is the single most-used primitive
+in the entire schema, and a native stdlib implementation avoids taking on a third-party
+dependency for it. See [07-roadmap.md](07-roadmap.md) Phase 1 notes for how this was
+discovered.
 
 ### Conversion
 

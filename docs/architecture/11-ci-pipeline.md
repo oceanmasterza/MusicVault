@@ -36,7 +36,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.14"
           cache: pip
 
       - name: Install dependencies
@@ -59,7 +59,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.14"
           cache: pip
 
       - name: Install dependencies
@@ -76,7 +76,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.14"
           cache: pip
 
       - name: Install dependencies
@@ -114,7 +114,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.14"
           cache: pip
 
       - name: Install dependencies
@@ -140,7 +140,7 @@ jobs:
 ```toml
 [project]
 name = "musicvault"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 
 [project.optional-dependencies]
 dev = [
@@ -158,7 +158,7 @@ build = [
 ]
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py314"
 line-length = 100
 src = ["src", "tests"]
 
@@ -167,10 +167,10 @@ select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "SIM"]
 
 [tool.black]
 line-length = 100
-target-version = ["py313"]
+target-version = ["py314"]
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 strict = true
 packages = ["musicvault"]
 

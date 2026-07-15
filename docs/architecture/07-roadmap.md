@@ -83,10 +83,14 @@ Phase 16  ░░░░░░░░░░ Packaging + installer
 - [x] Git commit: `feat: project scaffold with CI pipeline`
 
 ### Notes
-- Local development/verification used Python 3.14 (only version available in this
-  environment); `pyproject.toml` still targets `>=3.13` per the architecture, and CI
-  pins `3.13` explicitly via `actions/setup-python`. Revisit if 3.13-specific behavior
-  ever diverges from 3.14.
+- **Python version corrected to 3.14+** (was 3.13 at initial scaffold time). Discovered
+  before writing any Phase 2 database code: `uuid.uuid7()` — used to generate every
+  primary key in the schema — was only added to the standard library in Python 3.14,
+  not 3.12 as the original architecture notes incorrectly claimed. Since 3.14 was
+  already the only version installed in this environment, and using the stdlib
+  implementation avoids a third-party dependency for the single most-used primitive
+  in the codebase, the project now targets `>=3.14` everywhere: `pyproject.toml`,
+  CI workflows, and all architecture docs. See [12-pipeline-engine-v3.md](12-pipeline-engine-v3.md#uuid-storage-v7-as-blob16).
 - `event_bus.py` and `container.py` were added in Phase 1 (ahead of their originally
   planned phase) because `core/` is where they live in the v3 folder layout and the
   DI container needs *something* to hold from the first commit.
@@ -100,7 +104,9 @@ Phase 16  ░░░░░░░░░░ Packaging + installer
 **Goal**: SQLAlchemy Core tables, Alembic migrations, UUID schema, job queue tables.
 
 ### Key Deliverables
-- `infrastructure/database/tables.py` — Core table definitions
+- `db/tables.py` — Core table definitions
+- `db/uuid_utils.py` — `uuid_to_blob` / `blob_to_uuid` conversion helpers
+- `db/engine.py` — engine factory + PRAGMA setup (see [12-pipeline-engine-v3.md](12-pipeline-engine-v3.md))
 - Alembic migration `001_initial_schema_v2`
 - Repository implementations (Core, batch upsert)
 - Job, review, rules, file_identity repositories
