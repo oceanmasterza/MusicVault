@@ -348,8 +348,8 @@ Phase 16  ░░░░░░░░░░ Packaging + installer
       Phase 4 module)
 - [x] `mypy`, `ruff check`, `black --check` pass
 - [x] `lint-imports` passes (3/3 contracts kept)
-- [ ] GitHub Actions green on push
-- [ ] Git commit
+- [x] GitHub Actions green on push (verified: https://github.com/oceanmasterza/MusicVault/actions/runs/29442968257)
+- [x] Git commit: `feat: Phase 4 job dispatcher + scanner/hash workers`
 
 ### Notes
 - `TrackRepository.to_row`/`FileIdentityRepository.to_row` are public
