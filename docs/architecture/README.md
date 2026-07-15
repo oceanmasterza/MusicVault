@@ -2,13 +2,14 @@
 
 Complete software architecture for MusicVault — designed before application code is written.
 
-> **Current version**: v2 (2026-07-15). Start with [10-revision-v2.md](10-revision-v2.md).
+> **Current version**: v3 (2026-07-15). Start with [12-pipeline-engine-v3.md](12-pipeline-engine-v3.md).
 
 ## Documents
 
 | # | Document | Purpose |
 |---|----------|---------|
-| **10** | **[Revision v2](10-revision-v2.md)** | **Master revision — start here** |
+| **12** | **[Pipeline Engine v3](12-pipeline-engine-v3.md)** | **Latest — start here** |
+| **10** | [Revision v2](10-revision-v2.md) | Job queue, UUID, review, staging |
 | 01 | [Overview](01-overview.md) | System design, job pipeline, library zones |
 | 02 | [Folder Layout](02-folder-layout.md) | Project structure |
 | 03 | [Database Schema](03-database-schema.md) | UUID schema, jobs, review, staging |
@@ -19,6 +20,20 @@ Complete software architecture for MusicVault — designed before application co
 | 08 | [Performance](08-performance.md) | Million-track scalability |
 | 09 | [Testing Strategy](09-testing-strategy.md) | Test pyramid, fixtures |
 | 11 | [CI Pipeline](11-ci-pipeline.md) | GitHub Actions from Phase 1 |
+| 12 | **[Pipeline Engine v3](12-pipeline-engine-v3.md)** | DB writer queue, ProcessPool, event bus |
+
+## v3 Key Changes (from v2)
+
+| Change | Impact |
+|--------|--------|
+| **Single-writer DB queue** | Eliminates SQLite lock contention at scale |
+| **ProcessPool** for CPU workers | Bypasses GIL; multi-core hash/fingerprint |
+| **Event bus** + Qt bridge | GUI never coupled to worker threads |
+| **UUID as BLOB(16)** | ~20 MB index savings per column at 1M rows |
+| **Batch writes 5K–10K** | Optimal transaction size for single writer |
+| **Folder rename** | models/, services/, db/, workers/ |
+| **Composite confidence** | Weighted match score for review routing |
+| **Rules AST** | JSON/YAML → parsed tree evaluation |
 
 ## v2 Key Changes (from v1)
 
@@ -48,29 +63,23 @@ Complete software architecture for MusicVault — designed before application co
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Presentation (GUI)                        │
-│  Views ←→ ViewModels ←→ Application Services                 │
+│                    GUI (PySide6) + Event Bus Bridge          │
 ├─────────────────────────────────────────────────────────────┤
-│                    Application Layer                         │
-│  JobQueueService │ MetadataArbitrator │ ReviewQueueService   │
-│  RulesEngine │ OperationOrchestrator │ WatchFolderService   │
+│                    Services Layer                            │
+│  JobQueue │ Arbitrator │ Review │ Rules │ Staging │ Rollback│
+├──────────────────────────┬──────────────────────────────────┤
+│  ProcessPool (CPU)       │  ThreadPool (I/O)                │
+│  Hash │ Fingerprint │ Parse│  Scan │ Metadata │ Organize │ … │
+├──────────────────────────┴──────────────────────────────────┤
+│              Database Writer Queue (single thread)           │
 ├─────────────────────────────────────────────────────────────┤
-│                    Workers (Job Handlers)                    │
-│  Scanner │ Hash │ Fingerprint │ Metadata │ Artwork │ ...    │
-├─────────────────────────────────────────────────────────────┤
-│                    Domain Layer                              │
-│  Entities (UUID) │ Value Objects │ Domain Services           │
-├─────────────────────────────────────────────────────────────┤
-│                    Infrastructure                            │
-│  Repositories (SQLAlchemy Core) │ FileSystem │ HTTP         │
-├─────────────────────────────────────────────────────────────┤
-│                    Plugin Layer                              │
-│  MusicBrainz │ Discogs │ Navidrome │ Jellyfin │ Plex │ ... │
+│  Models (UUID dataclasses) │ DB (SQLAlchemy Core) │ Plugins │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## Reading Order
 
-1. **[10-revision-v2.md](10-revision-v2.md)** — scalability review + all design decisions
-2. **01 → 07** — detailed specifications
-3. **08, 09, 11** — reference during implementation
+1. **[12-pipeline-engine-v3.md](12-pipeline-engine-v3.md)** — latest refinements (DB writer, ProcessPool, event bus)
+2. **[10-revision-v2.md](10-revision-v2.md)** — v2 design decisions + scalability review
+3. **01 → 07** — detailed specifications
+4. **08, 09, 11** — reference during implementation

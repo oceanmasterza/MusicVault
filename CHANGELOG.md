@@ -9,7 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Architecture v2 revision ([10-revision-v2.md](docs/architecture/10-revision-v2.md)):
+- Architecture v3 pipeline engine refinements ([12-pipeline-engine-v3.md](docs/architecture/12-pipeline-engine-v3.md)):
+  - Dedicated single-writer DB queue (eliminates SQLite lock contention)
+  - ProcessPool for CPU-bound workers (hash, fingerprint, audio parse)
+  - ThreadPool for I/O-bound workers (scan, HTTP, file ops)
+  - Event bus + Qt bridge for GUI decoupling
+  - UUID v7 stored as BLOB(16) instead of TEXT(36)
+  - Batch writes increased to 5,000–10,000 rows
+  - Adaptive mmap sizing (not fixed 30 GB)
+  - Dual metadata cascades (identification vs enrichment)
+  - Composite confidence scoring formula
+  - Rules engine AST evaluation spec
+  - Folder layout renamed: models/, services/, db/, workers/
+- Updated performance strategy and folder layout for v3
+
+### Changed
+
+- Navidrome integration explicitly read-only for DB (writes via API only)
+- UUID v4 recommendation evaluated; v7 retained for index locality
+
+### Added (v2)
   - Scalability risk review (10 risks identified and mitigated)
   - SQLAlchemy Core instead of ORM
   - UUID v7 primary keys for all entities

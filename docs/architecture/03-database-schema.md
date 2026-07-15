@@ -7,12 +7,15 @@
 
 1. **SQLite with WAL mode** — concurrent reads during writes
 2. **SQLAlchemy Core** — no ORM; explicit table definitions and batch SQL
-3. **UUID v7 primary keys** — all entities use time-sortable UUIDs (stored as TEXT)
-4. **Job queue in database** — persistent, resumable background processing
-5. **Library zones** — incoming, staging, library, archive
-6. **Confidence scores** — per-field metadata confidence stored alongside values
-7. **Fingerprint persistence** — never recompute unless file identity changes
-8. **Alembic migrations** — schema evolves with versioned upgrade scripts
+3. **UUID v7 primary keys as BLOB(16)** — 16-byte binary storage, converted to `UUID` at application boundary
+4. **Single-writer discipline** — only `DatabaseWriter` thread executes mutations; workers queue `WriteDTO`s
+5. **Job queue in database** — persistent, resumable background processing
+6. **Library zones** — incoming, staging, library, archive
+7. **Confidence scores** — per-field + composite scoring for review routing
+8. **Fingerprint persistence** — never recompute unless file identity changes
+9. **Alembic migrations** — schema evolves with versioned upgrade scripts
+
+> **v3 update**: UUID storage changed from TEXT(36) to BLOB(16). See [12-pipeline-engine-v3.md](12-pipeline-engine-v3.md).
 
 ## Entity-Relationship Diagram
 
@@ -48,7 +51,7 @@ erDiagram
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `id` | TEXT | PK | UUID v7 |
+| `id` | BLOB(16) | PK | UUID v7 (binary) |
 | `name` | TEXT | NOT NULL | Display name |
 | `incoming_path` | TEXT | NOT NULL | Watch folder path |
 | `staging_path` | TEXT | NOT NULL | Staging zone path |
@@ -63,7 +66,7 @@ erDiagram
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `id` | TEXT | PK | UUID v7 |
+| `id` | BLOB(16) | PK | UUID v7 (binary) |
 | `name` | TEXT | NOT NULL | Canonical name |
 | `sort_name` | TEXT | NOT NULL | Sort key |
 | `mbid` | TEXT | NULL | MusicBrainz artist ID |
@@ -79,10 +82,10 @@ erDiagram
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `id` | TEXT | PK | UUID v7 |
+| `id` | BLOB(16) | PK | UUID v7 (binary) |
 | `title` | TEXT | NOT NULL | |
 | `sort_title` | TEXT | NOT NULL | |
-| `album_artist_id` | TEXT | FK → artists | |
+| `album_artist_id` | BLOB(16) | FK → artists | |
 | `year` | INTEGER | NULL | |
 | `mbid` | TEXT | NULL | MusicBrainz release ID |
 | `release_group_mbid` | TEXT | NULL | |
@@ -101,10 +104,10 @@ erDiagram
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `id` | TEXT | PK | UUID v7 |
-| `library_id` | TEXT | FK → libraries, NOT NULL | |
-| `album_id` | TEXT | FK → albums, NULL | |
-| `artist_id` | TEXT | FK → artists, NULL | |
+| `id` | BLOB(16) | PK | UUID v7 (binary) |
+| `library_id` | BLOB(16) | FK → libraries, NOT NULL | |
+| `album_id` | BLOB(16) | FK → albums, NULL | |
+| `artist_id` | BLOB(16) | FK → artists, NULL | |
 | `zone` | TEXT | NOT NULL | `incoming`, `staging`, `library`, `archive` |
 | `file_path` | TEXT | NOT NULL, UNIQUE | Absolute path |
 | `file_name` | TEXT | NOT NULL | |
@@ -176,8 +179,8 @@ Per-field confidence scores from metadata arbitration.
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `id` | TEXT | PK | UUID v7 |
-| `track_id` | TEXT | FK → tracks, NOT NULL | |
+| `id` | BLOB(16) | PK | UUID v7 (binary) |
+| `track_id` | BLOB(16) | FK → tracks, NOT NULL | |
 | `field_name` | TEXT | NOT NULL | `artist`, `album`, `title`, `year`, ... |
 | `value` | TEXT | NULL | Resolved value |
 | `confidence` | REAL | NOT NULL | 0.0–1.0 |
@@ -197,13 +200,13 @@ Central job queue — the backbone of all background processing.
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `id` | TEXT | PK | UUID v7 |
-| `library_id` | TEXT | FK → libraries, NOT NULL | |
+| `id` | BLOB(16) | PK | UUID v7 (binary) |
+| `library_id` | BLOB(16) | FK → libraries, NOT NULL | |
 | `job_type` | TEXT | NOT NULL | See JobType enum |
 | `status` | TEXT | NOT NULL | `pending`, `running`, `completed`, `failed`, `retry`, `cancelled` |
 | `priority` | INTEGER | DEFAULT 100 | Lower = higher priority |
 | `payload` | TEXT | NOT NULL | JSON job-specific data |
-| `parent_job_id` | TEXT | FK → jobs, NULL | Pipeline chaining |
+| `parent_job_id` | BLOB(16) | FK → jobs, NULL | Pipeline chaining |
 | `attempt_count` | INTEGER | DEFAULT 0 | |
 | `max_attempts` | INTEGER | DEFAULT 3 | |
 | `error_message` | TEXT | NULL | |
@@ -240,11 +243,11 @@ Central job queue — the backbone of all background processing.
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `id` | TEXT | PK | UUID v7 |
-| `library_id` | TEXT | FK → libraries, NOT NULL | |
-| `track_id` | TEXT | FK → tracks, NULL | |
-| `album_id` | TEXT | FK → albums, NULL | |
-| `duplicate_group_id` | TEXT | FK → duplicate_groups, NULL | |
+| `id` | BLOB(16) | PK | UUID v7 (binary) |
+| `library_id` | BLOB(16) | FK → libraries, NOT NULL | |
+| `track_id` | BLOB(16) | FK → tracks, NULL | |
+| `album_id` | BLOB(16) | FK → albums, NULL | |
+| `duplicate_group_id` | BLOB(16) | FK → duplicate_groups, NULL | |
 | `review_type` | TEXT | NOT NULL | See ReviewType enum |
 | `status` | TEXT | NOT NULL | `pending`, `approved`, `rejected`, `deferred` |
 | `title` | TEXT | NOT NULL | User-visible summary |
@@ -278,8 +281,8 @@ Central job queue — the backbone of all background processing.
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `id` | TEXT | PK | UUID v7 |
-| `library_id` | TEXT | FK → libraries, NOT NULL | |
+| `id` | BLOB(16) | PK | UUID v7 (binary) |
+| `library_id` | BLOB(16) | FK → libraries, NOT NULL | |
 | `name` | TEXT | NOT NULL | |
 | `enabled` | BOOLEAN | DEFAULT TRUE | |
 | `priority` | INTEGER | DEFAULT 100 | |
@@ -297,11 +300,11 @@ Central job queue — the backbone of all background processing.
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `id` | TEXT | PK | UUID v7 |
-| `library_id` | TEXT | FK → libraries | |
+| `id` | BLOB(16) | PK | UUID v7 (binary) |
+| `library_id` | BLOB(16) | FK → libraries | |
 | `match_type` | TEXT | NOT NULL | `fingerprint`, `mbid`, `hash`, `fuzzy` |
 | `match_confidence` | REAL | NOT NULL | |
-| `best_track_id` | TEXT | FK → tracks | Highest quality_score |
+| `best_track_id` | BLOB(16) | FK → tracks | Highest quality_score |
 | `track_count` | INTEGER | NOT NULL | |
 | `detected_at` | TEXT | NOT NULL | |
 | `status` | TEXT | DEFAULT `open` | `open`, `resolved`, `ignored` |
@@ -325,7 +328,7 @@ Central job queue — the backbone of all background processing.
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `id` | TEXT | PK | UUID v7 |
+| `id` | BLOB(16) | PK | UUID v7 (binary) |
 | `operation_type` | TEXT | NOT NULL | |
 | `status` | TEXT | NOT NULL | |
 | `is_dry_run` | BOOLEAN | DEFAULT FALSE | |
@@ -333,15 +336,15 @@ Central job queue — the backbone of all background processing.
 | `affected_count` | INTEGER | DEFAULT 0 | |
 | `started_at` | TEXT | NOT NULL | |
 | `completed_at` | TEXT | NULL | |
-| `snapshot_id` | TEXT | FK → rollback_snapshots | |
+| `snapshot_id` | BLOB(16) | FK → rollback_snapshots | |
 
 ### `change_history`
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `id` | TEXT | PK | UUID v7 |
-| `operation_id` | TEXT | FK → operations | |
-| `track_id` | TEXT | FK → tracks | |
+| `id` | BLOB(16) | PK | UUID v7 (binary) |
+| `operation_id` | BLOB(16) | FK → operations | |
+| `track_id` | BLOB(16) | FK → tracks | |
 | `change_type` | TEXT | NOT NULL | |
 | `field_name` | TEXT | NULL | |
 | `old_value` | TEXT | NULL | JSON |
@@ -356,8 +359,8 @@ Central job queue — the backbone of all background processing.
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
-| `id` | TEXT | PK | UUID v7 |
-| `operation_id` | TEXT | FK → operations | |
+| `id` | BLOB(16) | PK | UUID v7 (binary) |
+| `operation_id` | BLOB(16) | FK → operations | |
 | `snapshot_data` | BLOB | NOT NULL | Compressed JSON |
 | `created_at` | TEXT | NOT NULL | |
 | `restored_at` | TEXT | NULL | |
@@ -379,7 +382,7 @@ Additional tables:
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | TEXT | UUID v7 |
-| `library_id` | TEXT | FK |
+| `library_id` | BLOB(16) | FK |
 | `plugin_id` | TEXT | e.g. `navidrome` |
 | `server_url` | TEXT | |
 | `db_path` | TEXT | Optional direct DB path (Navidrome) |

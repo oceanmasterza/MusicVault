@@ -1,4 +1,7 @@
-# 08 — Performance Strategy
+# 08 — Performance Strategy (v3)
+
+> **Updated**: Incorporates single-writer DB queue, ProcessPool/ThreadPool split, generator streaming.
+> See [12-pipeline-engine-v3.md](12-pipeline-engine-v3.md).
 
 ## Target
 
@@ -8,262 +11,149 @@ MusicVault must comfortably manage libraries of **1,000,000+ tracks** on a typic
 
 | Operation | Target (1M tracks) | Strategy |
 |-----------|-------------------|----------|
-| Full scan (first time) | < 8 hours | 8-thread pool, batch DB writes |
+| Full scan (metadata only) | < 4 hours | ProcessPool hash + single DB writer |
+| Full fingerprint pass | < 24 hours | ProcessPool fpcalc, background job |
 | Incremental scan | < 5 minutes | mtime comparison, skip unchanged |
-| Dashboard load | < 500 ms | Materialized `library_stats` table |
-| Library browse (page) | < 200 ms | Indexed query + pagination (100 rows) |
-| Search (title/artist) | < 1 second | SQLite FTS5 or indexed LIKE |
-| Duplicate detection | < 30 minutes | Batch fingerprint comparison |
-| Metadata fix (1000 tracks) | < 30 minutes | Rate-limited API + cache |
-| Report generation | < 60 seconds | Streaming write, no full load |
+| Dashboard load | < 500 ms | Materialized `library_stats` |
+| Library browse (page) | < 200 ms | Indexed query + pagination |
+| Duplicate detection | < 30 minutes | Generator streaming + batch grouping |
+| Metadata (1000 tracks) | < 30 minutes | Rate-limited + cache-first cascade |
 
-## Scanning Performance
+## Execution Engine
 
-### Thread Pool Architecture
+### Three-Tier Worker Model
 
 ```
-Main Thread
-  └── ScannerService.scan_library()
-        ├── FileWalker.walk()           → list of file paths (single thread)
-        └── ThreadPoolExecutor(8)
-              ├── Worker 1: read → hash → fingerprint → queue
-              ├── Worker 2: read → hash → fingerprint → queue
-              ├── ...
-              └── DB Writer Thread: batch upsert every 500 tracks
+ProcessPoolExecutor          ThreadPoolExecutor         DatabaseWriter
+(CPU-bound)                  (I/O-bound)                (single thread)
+─────────────────           ─────────────────           ──────────────
+HashWorker                   ScannerWorker              ← WriteDTO queue
+FingerprintWorker            MetadataWorker             batch 5K–10K rows
+AudioParserWorker            ArtworkWorker              one transaction
+QualityScorerWorker          OrganizerWorker
+                             MediaServerWorker
+                             DuplicateWorker
 ```
 
-### Optimizations
+**Critical rule**: Only `DatabaseWriter` executes INSERT/UPDATE/DELETE. All other components are read-only against SQLite or queue writes.
 
-1. **Batch database writes** — accumulate 500 tracks in memory, single `upsert_batch()` transaction
-2. **Skip unchanged files** — compare `file_modified` mtime against DB; skip if identical
-3. **Lazy fingerprinting** — fingerprint only on first scan or when requested; not during incremental
-4. **Extension pre-filter** — `FileWalker` checks extension before stat call
-5. **Memory-mapped I/O** — SQLite `mmap_size = 256MB` for read-heavy queries
-6. **No artwork extraction during scan** — only detect presence (`has_embedded_art` boolean); extract on demand
+### Why Not ThreadPool for Everything (v2 gap)
 
-### Throughput Estimates
+Python's GIL limits CPU-bound work to ~1 core in threads:
 
-| Step | Per-file time | Notes |
-|------|--------------|-------|
-| File stat + extension check | ~0.1 ms | Filesystem metadata |
-| Mutagen metadata read | ~5–20 ms | Depends on format, tag size |
-| SHA256 hash (50 MB FLAC) | ~100 ms | Disk I/O bound |
-| Chromaprint generate | ~500 ms | CPU bound |
-| DB upsert (batch of 500) | ~50 ms amortized | Per file in batch |
+| Task | Bound | Pool |
+|------|-------|------|
+| SHA-256 hash | CPU | **ProcessPool** |
+| Chromaprint (fpcalc) | CPU | **ProcessPool** |
+| Mutagen tag decode | CPU | **ProcessPool** |
+| Directory walk | I/O | ThreadPool |
+| HTTP (MusicBrainz) | I/O | ThreadPool |
+| File move/rename | I/O | ThreadPool |
 
-**Without fingerprinting**: ~50 files/second → 1M tracks in ~5.5 hours
-**With fingerprinting**: ~1.5 files/second → 1M tracks in ~7.7 days (run as background task)
+Expected hash throughput: ~70 files/sec on 8-core (ProcessPool) vs ~10 files/sec (ThreadPool).
 
-Fingerprinting is **decoupled** from scanning — it runs as a separate background job after the initial scan.
-
-## Database Performance
-
-### SQLite Tuning
+## Database Writer Queue
 
 ```python
-ENGINE_OPTIONS = {
-    "connect_args": {
-        "check_same_thread": False,
-    },
-    "pool_size": 5,
-    "max_overflow": 10,
-}
+# Workers emit DTOs — never touch SQLite for writes
+db_writer_queue.put(WriteDTO(
+    table="tracks",
+    operation="upsert",
+    rows=[...5000 rows...],
+    job_id=job.id,
+))
+```
 
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Batch size | 5,000–10,000 rows | Amortize transaction overhead |
+| Flush interval | 500 ms | Don't hold partial batches too long |
+| Queue type | `queue.Queue` | Thread-safe, unbounded |
+| Writer count | **1** | SQLite single-writer constraint |
+
+### Write Contention Elimination
+
+Without single writer (v2 risk):
+- 8 workers × small commits = constant `database is locked`
+- Retry storms degrade throughput 10×
+
+With single writer (v3):
+- Workers never block on write lock
+- One large transaction per batch = optimal WAL append
+
+## Generator-Based Streaming
+
+Never load full library into RAM:
+
+```python
+for batch in iter_tracks(conn, library_id, batch_size=1_000):
+    process_batch(batch)    # Fixed memory regardless of library size
+```
+
+Mandatory for: duplicate detection, reports, quality rescoring, incremental scan diff.
+
+## SQLite Tuning
+
+```python
 PRAGMAS = [
-    "PRAGMA journal_mode = WAL",       # Concurrent reads during writes
-    "PRAGMA synchronous = NORMAL",     # Balance safety and speed
-    "PRAGMA cache_size = -64000",      # 64 MB page cache
-    "PRAGMA mmap_size = 268435456",    # 256 MB mmap
-    "PRAGMA temp_store = MEMORY",      # Temp tables in RAM
+    "PRAGMA journal_mode = WAL",
+    "PRAGMA synchronous = NORMAL",
+    "PRAGMA cache_size = -64000",              # 64 MB page cache
+    "PRAGMA temp_store = MEMORY",
     "PRAGMA foreign_keys = ON",
-    "PRAGMA busy_timeout = 5000",      # Wait 5s on lock contention
+    "PRAGMA busy_timeout = 5000",
+    "PRAGMA mmap_size = {adaptive}",           # min(30GB, 25% available RAM)
 ]
 ```
 
-### Query Optimization
+**UUID storage**: BLOB(16) not TEXT(36) — saves ~20 MB per indexed column at 1M rows.
 
-| Pattern | Technique |
-|---------|-----------|
-| Paginated track list | `LIMIT/OFFSET` with indexed `ORDER BY` |
-| Full-text search | SQLite FTS5 virtual table synced with `tracks` |
-| Dashboard stats | Pre-computed `library_stats` row, refreshed after scan |
-| Duplicate detection | Load fingerprints into memory, hash-group in Python |
-| Artist album count | Denormalized `album_count` on `artists` table |
-| Format breakdown | JSON column in `library_stats`, computed during scan |
+## Memory Budget
 
-### FTS5 for Search
+| Component | Max | Notes |
+|-----------|-----|-------|
+| ProcessPool workers | 8 × 50 MB = 400 MB | One file per process |
+| DB writer buffer | ~50 MB | 10K rows × ~5 KB |
+| DB page cache | 64 MB | PRAGMA |
+| Generator batches | 10 MB | 1K tracks in flight |
+| GUI | 10 MB | Virtual scrolling |
+| **Total peak** | **~550 MB** | Well within 16 GB |
 
-```sql
-CREATE VIRTUAL TABLE tracks_fts USING fts5(
-    title, artist_name, album_title,
-    content='tracks',
-    content_rowid='id',
-    tokenize='porter unicode61'
-);
-```
+Child processes in ProcessPool do not hold SQLite connections — results returned as dicts, parent enqueues WriteDTO.
 
-Synced via triggers on `tracks` INSERT/UPDATE/DELETE. Sub-second search across 1M tracks.
+## Fingerprint Skip Logic
 
-### Connection Management
+If `file_identity.file_size + file_modified` unchanged → skip hash, fingerprint, and metadata workers. At 1M tracks with 1% daily change, incremental processing touches ~10K files not 1M.
 
-- **Read connections**: Pool of 5, used by GUI queries and reports
-- **Write connection**: Single dedicated connection for scan writes and operations
-- **WAL mode**: Readers never block writers
+## Network Rate Limiting
 
-## Memory Management
-
-### Budget
-
-| Component | Max Memory | Strategy |
-|-----------|-----------|----------|
-| Thread pool workers | 8 × 50 MB = 400 MB | One file in memory per worker |
-| DB page cache | 64 MB | SQLite PRAGMA |
-| Fingerprint batch | 100 MB | Process in chunks of 10,000 |
-| GUI track table | 10 MB | Virtual scrolling, 100 rows loaded |
-| Artwork cache | 200 MB | LRU eviction, disk-backed |
-| **Total peak** | **~800 MB** | Well within 16 GB systems |
-
-### Rules
-
-1. Never load all tracks into memory — always paginate
-2. Stream report generation — write rows as fetched, don't build full dataset
-3. Fingerprint comparison uses on-disk cache, not in-memory dict of 1M entries
-4. Artwork bytes stored on disk (`cache/artwork/`), not in SQLite BLOBs (except small embedded art)
-
-## Caching Strategy
-
-### Three-Tier Cache
-
-```
-L1: In-memory LRU (hot data, session lifetime)
-  → Last 1000 track DTOs, active library stats
-
-L2: Disk cache (warm data, TTL-based)
-  → MusicBrainz responses (7 days)
-  → AcoustID lookups (30 days)
-  → Artwork images (30 days)
-  → Fingerprint data (permanent)
-
-L3: Database (cold data, permanent)
-  → All track metadata, fingerprints, hashes
-```
-
-### Cache Invalidation
-
-| Event | Invalidation |
-|-------|-------------|
-| Scan completes | L1 stats cleared; L2 unaffected; L3 updated |
-| Metadata fix applied | L1 track DTOs cleared; L3 updated |
-| Config change | L1 organize rules refreshed |
-| Plugin config change | L2 API cache cleared for that plugin |
-
-## Duplicate Detection at Scale
-
-### Algorithm (1M tracks)
-
-```
-Phase 1: Hash grouping (O(n))
-  → SELECT hash_value, GROUP BY → exact duplicates
-  → ~seconds for 3M hash rows
-
-Phase 2: MBID grouping (O(n))
-  → SELECT mb_recording_id, GROUP BY → same recording
-  → ~seconds for 1M tracks
-
-Phase 3: AcoustID grouping (O(n))
-  → SELECT acoustid_id, GROUP BY → fingerprint matches
-  → ~seconds for 1M fingerprints
-
-Phase 4: Fuzzy matching (O(n log n))
-  → Load fingerprints not matched in phases 1-3
-  → Sort by duration, compare neighbors within ±2s
-  → Chromaprint similarity > 0.85 → duplicate
-  → ~minutes for remaining unmatched tracks
-```
-
-Phases 1–3 handle ~95% of duplicates in seconds. Phase 4 is the expensive step, run only on unmatched tracks.
-
-## Network Performance
-
-### API Rate Limits
-
-| API | Limit | MusicVault Policy |
-|-----|-------|-------------------|
-| MusicBrainz | 1 req/sec | 1 req/sec (respect) |
-| AcoustID | 3 req/sec | 3 req/sec |
-| Cover Art Archive | No limit | 5 req/sec (polite) |
-| Navidrome | Server-dependent | 2 req/sec default |
-
-### Batching
-
-- Metadata identification queues tracks, processes sequentially with rate limiting
-- User can pause/resume identification queue
-- Estimated time shown: "Identifying 50,000 tracks ≈ 14 hours"
+Adaptive token bucket per provider. Cache-first cascade — see [12-pipeline-engine-v3.md § Metadata Provider Cascade](12-pipeline-engine-v3.md).
 
 ## GUI Responsiveness
 
-### Rules for 60 FPS UI
+- Workers publish to **EventBus**; `QtEventBridge` marshals to main thread
+- Progress updates throttled to 4/sec
+- Job Monitor polls `jobs` table (read-only, WAL concurrent)
+- No database writes on main thread
 
-1. No database query on main thread — ever
-2. Table models use `fetchMore()` — load 100 rows at a time
-3. Images loaded asynchronously via `QThreadPool` + `QPixmap` cache
-4. Progress updates throttled to 4/second (250 ms minimum interval)
-5. Heavy computations (duplicate detection, report gen) show modal progress dialog
+## Profiling
 
-### Virtual Scrolling
-
-`TrackTable` with 1M tracks:
-
-```python
-class TrackTableModel(QAbstractTableModel):
-    PAGE_SIZE = 100
-
-    def rowCount(self, parent):
-        return self._total_count  # 1,000,000
-
-    def data(self, index, role):
-        row = index.row()
-        if row not in self._cache:
-            self._fetch_page(row // self.PAGE_SIZE)
-        return self._cache[row].get(role)
-```
-
-Only 100–200 rows in memory at any time. Page fetches run in worker thread.
-
-## Profiling & Monitoring
-
-### Built-in Metrics
-
-Logged after each major operation:
+Built-in metrics logged per pipeline stage:
 
 ```
-Scan complete: 52,341 files in 18m 32s (47.1 files/sec)
-  Metadata read: 12m 10s (avg 14ms/file)
-  Hash compute: 4m 22s (avg 5ms/file)
-  DB write: 1m 45s (avg 2ms/file)
-  Skipped (unchanged): 41,203
+Scan session: 52,341 files in 2h 14m
+  Hash (ProcessPool):     1h 02m  (14.0 files/sec, 8 cores)
+  DB writes:              4m 12s  (12 batches × ~4400 rows)
+  Skipped (unchanged):    41,203
+  Fingerprint queue:     11,138 pending jobs
 ```
 
-### Development Profiling
+## Hardware Recommendations
 
-- `cProfile` integration behind `--profile` CLI flag
-- Loguru structured logging with `duration_ms` field
-- SQLite `EXPLAIN QUERY PLAN` for slow query detection in debug log
+| Library Size | CPU | RAM | Disk |
+|-------------|-----|-----|------|
+| < 50K | 4-core | 8 GB | SSD |
+| 50K–500K | 8-core | 16 GB | NVMe |
+| 500K–1M+ | 8+ core | 32 GB | NVMe |
 
-## Hardware Recommendations (User-Facing)
-
-| Library Size | CPU | RAM | Disk | Notes |
-|-------------|-----|-----|------|-------|
-| < 50K tracks | 4-core | 8 GB | Any SSD | Runs smoothly on any modern PC |
-| 50K–500K | 8-core | 16 GB | NVMe SSD | Recommended for fingerprinting |
-| 500K–1M+ | 8+ core | 32 GB | NVMe SSD | Fingerprint as overnight background job |
-
-## Future Optimizations (Post-1.0)
-
-| Optimization | Trigger | Approach |
-|-------------|---------|----------|
-| PostgreSQL support | Multi-user / network | Optional backend for shared libraries |
-| GPU fingerprinting | Chromaprint GPU port | If available, 10× fingerprint speed |
-| Incremental duplicate detection | After incremental scan | Only check new/changed tracks |
-| Parallel report generation | Report > 60 seconds | Chunk by artist, merge output |
-| Database partitioning | > 2M tracks | Partition `tracks` by library_id |
+ProcessPool benefits scale with physical cores — more cores = faster hash/fingerprint passes.

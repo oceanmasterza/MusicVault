@@ -1,4 +1,6 @@
-# 02 — Project Folder Layout
+# 02 — Project Folder Layout (v3)
+
+> **Updated**: Renamed layers per pipeline engine design. See [12-pipeline-engine-v3.md](12-pipeline-engine-v3.md).
 
 ## Repository Structure
 
@@ -6,138 +8,122 @@
 MusicVault/
 ├── .github/
 │   └── workflows/
-│       ├── ci.yml                  # pytest, mypy, lint on push/PR
-│       └── release.yml             # PyInstaller build + artifact upload
+│       ├── ci.yml                  # ruff, black, mypy, pytest
+│       └── release.yml             # PyInstaller on tags
 │
 ├── docs/
-│   ├── architecture/                 # This documentation set
-│   ├── user-guide/                 # End-user documentation (Phase 12+)
-│   └── api/                        # Generated API docs (Sphinx, Phase 13+)
+│   ├── architecture/
+│   ├── user-guide/
+│   └── api/
 │
 ├── src/
 │   └── musicvault/
 │       ├── __init__.py
 │       ├── __main__.py             # Entry point: python -m musicvault
-│       ├── app.py                  # Application bootstrap, DI container wiring
+│       ├── app.py                  # Bootstrap: DI, logging, config, event bus
 │       │
-│       ├── core/                   # Cross-cutting concerns
-│       │   ├── __init__.py
-│       │   ├── config.py           # Config loading, validation, migration
-│       │   ├── container.py        # Dependency injection container
-│       │   ├── exceptions.py       # Application exception hierarchy
-│       │   ├── logging.py          # Loguru setup
-│       │   └── paths.py            # App data dirs, platform paths
-│       │
-│       ├── domain/                 # Pure business logic (no I/O)
+│       ├── models/                 # Pure domain (zero I/O dependencies)
 │       │   ├── __init__.py
 │       │   ├── entities/
-│       │   │   ├── __init__.py
-│       │   │   ├── track.py        # Track entity
-│       │   │   ├── album.py        # Album entity
-│       │   │   ├── artist.py       # Artist entity
-│       │   │   ├── artwork.py      # Artwork entity
-│       │   │   ├── fingerprint.py  # Fingerprint value object
-│       │   │   ├── duplicate.py    # DuplicateGroup entity
-│       │   │   └── scan.py         # ScanSession entity
+│       │   │   ├── track.py
+│       │   │   ├── album.py
+│       │   │   ├── artist.py
+│       │   │   ├── artwork.py
+│       │   │   ├── job.py
+│       │   │   ├── review_item.py
+│       │   │   ├── rule.py
+│       │   │   └── duplicate.py
 │       │   ├── value_objects/
-│       │   │   ├── __init__.py
-│       │   │   ├── audio_format.py # Codec, bitrate, bit depth, sample rate
+│       │   │   ├── audio_format.py
 │       │   │   ├── quality_score.py
-│       │   │   ├── file_hash.py
-│       │   │   ├── metadata_tags.py
-│       │   │   └── organize_path.py
-│       │   ├── services/
-│       │   │   ├── __init__.py
+│       │   │   ├── field_confidence.py
+│       │   │   ├── file_identity.py
+│       │   │   ├── library_zone.py
+│       │   │   └── write_dto.py
+│       │   ├── services/           # Pure domain logic (no I/O)
 │       │   │   ├── quality_scorer.py
 │       │   │   ├── duplicate_matcher.py
 │       │   │   ├── rename_engine.py
-│       │   │   └── organize_engine.py
-│       │   └── interfaces/
-│       │       ├── __init__.py
-│       │       ├── repositories.py  # Repository protocols
-│       │       ├── file_reader.py   # Audio file reading protocol
-│       │       ├── fingerprint.py   # Fingerprint generation protocol
-│       │       └── file_ops.py      # File move/rename/delete protocol
+│       │   │   ├── organize_engine.py
+│       │   │   └── confidence_calculator.py
+│       │   └── interfaces/         # Protocol definitions
+│       │       ├── repositories.py
+│       │       ├── file_reader.py
+│       │       ├── fingerprint.py
+│       │       └── file_ops.py
 │       │
-│       ├── application/            # Use case orchestration
+│       ├── core/                   # Cross-cutting infrastructure
 │       │   ├── __init__.py
-│       │   ├── job_queue_service.py
+│       │   ├── config.py           # JSON/YAML config load, validate, migrate
+│       │   ├── container.py        # Dependency injection
+│       │   ├── event_bus.py        # Thread-safe pub/sub for domain events
+│       │   ├── exceptions.py
+│       │   ├── logging.py          # Loguru setup
+│       │   └── paths.py            # Platform app data dirs
+│       │
+│       ├── db/                     # SQLAlchemy Core (NOT ORM)
+│       │   ├── __init__.py
+│       │   ├── engine.py           # Engine factory, PRAGMA setup
+│       │   ├── tables.py           # Core Table definitions
+│       │   ├── uuid_utils.py       # uuid_to_blob / blob_to_uuid
+│       │   ├── writer.py           # DatabaseWriter single-thread queue
+│       │   ├── migrations/         # Alembic
+│       │   │   ├── env.py
+│       │   │   └── versions/
+│       │   └── repositories/
+│       │       ├── track_repo.py
+│       │       ├── album_repo.py
+│       │       ├── artist_repo.py
+│       │       ├── job_repo.py
+│       │       ├── review_repo.py
+│       │       ├── rule_repo.py
+│       │       ├── file_identity_repo.py
+│       │       ├── duplicate_repo.py
+│       │       ├── artwork_repo.py
+│       │       ├── rollback_repo.py
+│       │       └── change_history_repo.py
+│       │
+│       ├── services/               # Application / business orchestration
+│       │   ├── __init__.py
+│       │   ├── job_queue_manager.py
 │       │   ├── job_dispatcher.py
 │       │   ├── metadata_arbitrator.py
 │       │   ├── review_queue_service.py
-│       │   ├── rules_engine.py
+│       │   ├── rules_engine.py     # AST parser + evaluator
+│       │   ├── staging_engine.py   # Zone transitions
 │       │   ├── watch_folder_service.py
 │       │   ├── operation_orchestrator.py
+│       │   ├── rollback_service.py
 │       │   ├── report_service.py
-│       │   ├── workers/            # Job handler implementations
-│       │   │   ├── __init__.py
-│       │   │   ├── scanner_worker.py
-│       │   │   ├── hash_worker.py
-│       │   │   ├── fingerprint_worker.py
-│       │   │   ├── metadata_worker.py
-│       │   │   ├── artwork_worker.py
-│       │   │   ├── duplicate_worker.py
-│       │   │   ├── rule_worker.py
-│       │   │   ├── organizer_worker.py
-│       │   │   ├── media_server_worker.py
-│       │   │   └── report_worker.py
-│       │   └── dto/                # Data transfer objects for GUI
-│       │       ├── __init__.py
-│       │       ├── scan_dto.py
+│       │   ├── plugin_controller.py
+│       │   └── dto/
 │       │       ├── track_dto.py
-│       │       ├── duplicate_dto.py
+│       │       ├── job_dto.py
+│       │       ├── review_dto.py
 │       │       └── report_dto.py
 │       │
-│       ├── infrastructure/         # External system implementations
+│       ├── workers/                # Async execution (pools live here)
 │       │   ├── __init__.py
-│       │   ├── database/
-│       │   │   ├── __init__.py
-│       │   │   ├── engine.py       # SQLAlchemy Core engine factory
-│       │   │   ├── tables.py       # SQLAlchemy Core Table definitions
-│       │   │   ├── migrations/     # Alembic migration scripts
-│       │   │   │   ├── env.py
-│       │   │   │   └── versions/
-│       │   │   └── repositories/   # Repository implementations
-│       │   │       ├── __init__.py
-│       │   │       ├── track_repo.py
-│       │   │       ├── album_repo.py
-│       │   │       ├── artist_repo.py
-│       │   │       ├── job_repo.py
-│       │   │       ├── review_repo.py
-│       │   │       ├── rule_repo.py
-│       │   │       ├── file_identity_repo.py
-│       │   │       ├── duplicate_repo.py
-│       │   │       ├── artwork_repo.py
-│       │   │       ├── rollback_repo.py
-│       │   │       └── change_history_repo.py
-│       │   ├── audio/
-│       │   │   ├── __init__.py
-│       │   │   ├── mutagen_reader.py
-│       │   │   ├── ffmpeg_probe.py
-│       │   │   └── format_registry.py
-│       │   ├── fingerprint/
-│       │   │   ├── __init__.py
-│       │   │   ├── chromaprint_gen.py
-│       │   │   └── acoustid_client.py
-│       │   ├── filesystem/
-│       │   │   ├── __init__.py
-│       │   │   ├── file_walker.py
-│       │   │   ├── file_operations.py
-│       │   │   └── safe_delete.py
-│       │   ├── imaging/
-│       │   │   ├── __init__.py
-│       │   │   └── artwork_processor.py
-│       │   └── http/
-│       │       ├── __init__.py
-│       │       └── rate_limited_client.py
+│       │   ├── pools.py            # ProcessPool + ThreadPool config
+│       │   ├── cpu/                # ProcessPoolExecutor workers
+│       │   │   ├── hash_worker.py
+│       │   │   ├── fingerprint_worker.py
+│       │   │   ├── audio_parser_worker.py
+│       │   │   └── quality_scorer_worker.py
+│       │   └── io/                 # ThreadPoolExecutor workers
+│       │       ├── scanner_worker.py
+│       │       ├── metadata_worker.py
+│       │       ├── artwork_worker.py
+│       │       ├── duplicate_worker.py
+│       │       ├── rule_worker.py
+│       │       ├── organizer_worker.py
+│       │       └── media_server_worker.py
 │       │
-│       ├── plugins/                # Plugin system
-│       │   ├── __init__.py
-│       │   ├── manager.py          # Discovery, loading, lifecycle
-│       │   ├── registry.py         # Plugin type registry
-│       │   ├── base.py             # Base plugin classes and protocols
-│       │   └── builtin/            # Shipped plugins
-│       │       ├── __init__.py
+│       ├── plugins/
+│       │   ├── manager.py
+│       │   ├── registry.py
+│       │   ├── base.py
+│       │   └── builtin/
 │       │       ├── musicbrainz/
 │       │       ├── discogs/
 │       │       ├── acoustid/
@@ -154,139 +140,72 @@ MusicVault/
 │       │       ├── lyrion/
 │       │       └── mstream/
 │       │
-│       └── gui/                    # Presentation layer
-│           ├── __init__.py
+│       └── gui/
 │           ├── main_window.py
-│           ├── app.py              # QApplication setup, theme
-│           ├── resources/          # Icons, QSS stylesheets, fonts
-│           │   ├── icons/
-│           │   ├── styles/
-│           │   │   └── dark.qss
-│           │   └── resources.qrc
-│           ├── views/              # QWidget subclasses (dumb views)
-│           │   ├── __init__.py
-│           │   ├── dashboard_view.py
-│           │   ├── library_view.py
-│           │   ├── review_view.py
-│           │   ├── artists_view.py
-│           │   ├── albums_view.py
-│           │   ├── duplicates_view.py
-│           │   ├── job_monitor_view.py
-│           │   ├── artwork_view.py
-│           │   ├── reports_view.py
-│           │   ├── rules_view.py
-│           │   ├── logs_view.py
-│           │   ├── settings_view.py
-│           │   └── plugins_view.py
-│           ├── viewmodels/         # Presentation logic
-│           │   ├── __init__.py
-│           │   ├── base_viewmodel.py
-│           │   ├── dashboard_vm.py
-│           │   ├── library_vm.py
-│           │   ├── scan_vm.py
-│           │   ├── metadata_vm.py
-│           │   ├── duplicates_vm.py
-│           │   ├── artwork_vm.py
-│           │   ├── reports_vm.py
-│           │   ├── settings_vm.py
-│           │   └── plugins_vm.py
-│           ├── widgets/            # Reusable custom widgets
-│           │   ├── __init__.py
-│           │   ├── track_table.py
-│           │   ├── album_grid.py
-│           │   ├── progress_panel.py
-│           │   ├── operation_preview.py
-│           │   └── search_bar.py
-│           └── workers/            # QRunnable / QThread workers
-│               ├── __init__.py
-│               ├── scan_worker.py
-│               ├── metadata_worker.py
-│               └── report_worker.py
+│           ├── app.py              # QApplication, theme
+│           ├── bridge/
+│           │   └── qt_event_bridge.py  # EventBus → Qt signals
+│           ├── resources/
+│           ├── views/
+│           ├── viewmodels/
+│           └── widgets/
 │
 ├── tests/
-│   ├── __init__.py
-│   ├── conftest.py                 # Shared fixtures, test DB, temp dirs
+│   ├── conftest.py
 │   ├── unit/
-│   │   ├── domain/
-│   │   ├── application/
-│   │   └── infrastructure/
 │   ├── integration/
-│   │   ├── test_scanner.py
-│   │   ├── test_metadata.py
-│   │   ├── test_duplicates.py
-│   │   └── test_rollback.py
 │   └── fixtures/
-│       ├── audio/                  # Sample audio files (generated in CI)
-│       └── metadata/               # Sample MusicBrainz responses (JSON)
 │
 ├── packaging/
-│   ├── musicvault.spec             # PyInstaller spec
-│   ├── installer.iss               # Inno Setup script
-│   └── assets/
-│       └── icon.ico
-│
 ├── config/
-│   └── defaults.json               # Default configuration template
-│
-├── pyproject.toml                  # Project metadata, dependencies, entry points
+│   └── defaults.json
+├── pyproject.toml
 ├── LICENSE
 ├── README.md
-├── CHANGELOG.md
-└── CONTRIBUTING.md
+└── CHANGELOG.md
 ```
 
 ## Module Boundary Rules
 
 | Module | May Import From | Must NOT Import From |
 |--------|----------------|---------------------|
-| `gui/` | `application/`, `core/`, `domain/dto` | `infrastructure/`, `plugins/builtin/` |
-| `application/` | `domain/`, `core/` | `gui/`, `infrastructure/` (only via interfaces) |
-| `domain/` | `core/exceptions` only | Everything else |
-| `infrastructure/` | `domain/interfaces/`, `core/` | `gui/`, `application/` |
-| `plugins/` | `domain/interfaces/`, `core/` | `gui/`, `application/` |
+| `gui/` | `services/`, `core/`, `models/`, `services/dto` | `db/`, `workers/`, `plugins/builtin/` |
+| `services/` | `models/`, `core/` | `gui/`, `db/` (via interfaces only) |
+| `workers/` | `models/`, `core/`, `models/interfaces` | `gui/`, `db/` (writes via WriteDTO queue only) |
+| `models/` | `core/exceptions` only | Everything else |
+| `db/` | `models/`, `core/` | `gui/`, `services/`, `workers/` |
+| `plugins/` | `models/interfaces/`, `core/` | `gui/`, `services/` |
 
-Enforced by:
-- `import-linter` contracts in `pyproject.toml`
-- CI check on every PR
+**Critical worker rule**: Workers never import from `db.repositories` for writes. They emit `WriteDTO` to the DB writer queue. Read-only queries are permitted through repositories.
 
-## Naming Conventions
+## v2 → v3 Renames
 
-| Element | Convention | Example |
-|---------|-----------|---------|
-| Modules | `snake_case` | `scanner_service.py` |
-| Classes | `PascalCase` | `ScannerService` |
-| Interfaces/Protocols | `PascalCase` + suffix | `TrackRepository`, `MetadataProvider` |
-| Functions | `snake_case` | `scan_library()` |
-| Constants | `UPPER_SNAKE` | `MAX_THREAD_POOL_SIZE` |
-| DTOs | `PascalCase` + `DTO` suffix | `TrackSummaryDTO` |
-| DB tables | `snake_case` plural | `tracks`, `album_artists` |
-| DB columns | `snake_case` | `file_path`, `mb_recording_id` |
-| Config keys | `snake_case` | `library_paths`, `scan_options` |
-| Plugin entry points | `musicvault.plugins` group | `musicbrainz = musicvault.plugins.builtin.musicbrainz` |
+| v2 Path | v3 Path |
+|---------|---------|
+| `domain/entities/` | `models/entities/` |
+| `domain/value_objects/` | `models/value_objects/` |
+| `domain/services/` | `models/services/` |
+| `domain/interfaces/` | `models/interfaces/` |
+| `application/` | `services/` |
+| `application/workers/` | `workers/` |
+| `infrastructure/database/` | `db/` |
+| `infrastructure/audio/` etc. | `workers/` + `plugins/` (absorbed) |
 
-## Key Files Explained
+## Key Files
 
-### `src/musicvault/app.py`
-Bootstrap sequence:
-1. Initialize logging
-2. Load and migrate config
-3. Create DI container
-4. Initialize database (create if missing, run migrations)
-5. Discover and register plugins
-6. Launch GUI or CLI mode
+### `db/writer.py`
+Single-threaded batch writer. The only SQLite writer in the application.
 
-### `src/musicvault/core/container.py`
-Wires all dependencies. Single place where concrete implementations are bound to interfaces. Used by both GUI and tests (with overrides for mocks).
+### `core/event_bus.py`
+Thread-safe pub/sub. Workers publish; `gui/bridge/qt_event_bridge.py` subscribes.
 
-### `src/musicvault/application/operation_orchestrator.py`
-Central gate for all mutating operations. Ensures rollback snapshots, dry-run support, and transactional consistency.
+### `workers/pools.py`
+Configures ProcessPoolExecutor (CPU) and ThreadPoolExecutor (I/O) sizes based on `os.cpu_count()`.
 
-### `src/musicvault/plugins/manager.py`
-Discovers plugins via `importlib.metadata.entry_points`, validates against plugin protocols, manages lifecycle (load, enable, disable, configure).
+### `services/rules_engine.py`
+Parses JSON/YAML rules into AST, evaluates against `TrackContext`.
 
-## Data Directories (Runtime)
-
-Not in the repository; created at runtime:
+## Runtime Data Directories
 
 ```
 %APPDATA%/MusicVault/
@@ -294,23 +213,17 @@ Not in the repository; created at runtime:
 ├── secrets.json
 ├── musicvault.db
 ├── logs/
-│   ├── musicvault.log
-│   ├── debug.log
-│   └── crashes/
 ├── cache/
-│   ├── fingerprints/
-│   ├── artwork/
-│   └── musicbrainz/
 ├── backups/
-│   └── auto/
 └── rollback/
-    └── snapshots/
 ```
 
-## Build Artifacts
+## Library Zone Paths (on disk)
 
 ```
-dist/
-├── MusicVault.exe              # PyInstaller one-file or one-dir
-└── MusicVault-Setup-1.0.0.exe  # Inno Setup installer
+{library_root}/
+├── Incoming/       ← watch folder
+├── Staging/        ← processed, awaiting approval
+├── Music/          ← canonical library
+└── Archive/        ← superseded copies
 ```
