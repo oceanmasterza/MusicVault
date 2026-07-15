@@ -59,25 +59,37 @@ Phase 16  ░░░░░░░░░░ Packaging + installer
 
 ## Phase 1: Project Scaffold + CI
 
+**Status**: Complete
+
 **Goal**: Runnable empty application with DI, config, logging, and CI pipeline.
 
 ### Deliverables
-- `pyproject.toml` with dependencies and tool config
-- `src/musicvault/` package structure (empty modules)
-- `core/config.py`, `container.py`, `logging.py`, `paths.py`, `exceptions.py`
-- `app.py`, `__main__.py`
-- `config/defaults.json`
-- `tests/conftest.py` + one smoke test
-- `.github/workflows/ci.yml` (ruff, black, mypy, pytest)
-- `CONTRIBUTING.md`
+- [x] `pyproject.toml` with dependencies and tool config (ruff, black, mypy, import-linter)
+- [x] `src/musicvault/` package structure per v3 layout (`models/`, `core/`, `db/`, `services/`, `workers/`, `plugins/`, `gui/`)
+- [x] `core/config.py`, `container.py`, `logging.py`, `paths.py`, `exceptions.py`, `event_bus.py`
+- [x] `app.py`, `__main__.py`
+- [x] `config/defaults.json`
+- [x] `tests/conftest.py` + 43 tests (unit + integration)
+- [x] `.github/workflows/ci.yml` (ruff, black, mypy, pytest) and `release.yml`
+- [x] `CONTRIBUTING.md`
 
 ### Acceptance Criteria
-- `python -m musicvault` exits 0, prints version
-- `pytest` passes (≥1 test)
-- `mypy src/ --strict` passes
-- `ruff check` and `black --check` pass
-- GitHub Actions green on push
-- Git commit: `feat: project scaffold with CI pipeline`
+- [x] `python -m musicvault` exits 0, prints version
+- [x] `pytest` passes (43/43, 97% coverage)
+- [x] `mypy src/ --strict` passes (0 errors, 29 files)
+- [x] `ruff check` and `black --check` pass
+- [x] `lint-imports` passes (3/3 contracts kept)
+- [ ] GitHub Actions green on push (verify after push to remote)
+- [x] Git commit: `feat: project scaffold with CI pipeline`
+
+### Notes
+- Local development/verification used Python 3.14 (only version available in this
+  environment); `pyproject.toml` still targets `>=3.13` per the architecture, and CI
+  pins `3.13` explicitly via `actions/setup-python`. Revisit if 3.13-specific behavior
+  ever diverges from 3.14.
+- `event_bus.py` and `container.py` were added in Phase 1 (ahead of their originally
+  planned phase) because `core/` is where they live in the v3 folder layout and the
+  DI container needs *something* to hold from the first commit.
 
 **Handoff point**: Switch to implementation-focused model for Phases 2+.
 

@@ -29,9 +29,21 @@ Collectors, audiophiles, and self-hosted media server operators using **Navidrom
 
 ## Status
 
-**Phase 0b — Architecture v2** (current)
+**Phase 1 — Project Scaffold** (current)
 
-Architecture revision complete. No application code yet. See [Architecture Documentation](docs/architecture/README.md).
+Architecture is finalized (v3). The runnable scaffold exists: DI container, versioned
+config, logging, event bus, and CI pipeline. `python -m musicvault` bootstraps and exits
+cleanly. See [Architecture Documentation](docs/architecture/README.md).
+
+```powershell
+git clone https://github.com/musicvault/musicvault.git
+cd musicvault
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e ".[dev]"
+pytest              # 43 passed
+python -m musicvault  # MusicVault 0.1.0
+```
 
 ## Tech Stack
 
@@ -51,11 +63,13 @@ Architecture revision complete. No application code yet. See [Architecture Docum
 | CI | GitHub Actions (ruff, black, mypy, pytest) |
 | Packaging | PyInstaller |
 
-## Architecture Highlights (v2)
+## Architecture Highlights (v3)
 
 | Decision | Choice | Why |
 |----------|--------|-----|
 | Database access | SQLAlchemy Core | 3–5× faster than ORM at 1M+ rows |
+| Writes | Single-writer DB thread | Eliminates SQLite lock contention |
+| CPU-bound work | ProcessPool | Bypasses the GIL for hashing/fingerprinting |
 | Processing | Job queue + workers | Resumable, crash-safe, observable |
 | Metadata | Multi-provider arbitration | No single source of truth |
 | Uncertain data | Review queue (< 90% confidence) | Prevents metadata corruption |
@@ -67,8 +81,10 @@ Architecture revision complete. No application code yet. See [Architecture Docum
 
 | Document | Description |
 |----------|-------------|
-| **[Architecture v2](docs/architecture/10-revision-v2.md)** | Master revision with scalability review |
+| **[Pipeline Engine v3](docs/architecture/12-pipeline-engine-v3.md)** | Latest — DB writer, ProcessPool, event bus |
+| [Revision v2](docs/architecture/10-revision-v2.md) | Job queue, UUID, review, staging |
 | [Overview](docs/architecture/01-overview.md) | Job pipeline, library zones |
+| [Folder Layout](docs/architecture/02-folder-layout.md) | `models/`, `core/`, `db/`, `services/`, `workers/` |
 | [Database Schema](docs/architecture/03-database-schema.md) | UUID schema, jobs, review queue |
 | [Service Layer](docs/architecture/04-service-layer.md) | Job queue, arbitrator, rules |
 | [Plugin API](docs/architecture/05-plugin-api.md) | 10 media servers |
@@ -80,8 +96,8 @@ Architecture revision complete. No application code yet. See [Architecture Docum
 | Phase | Milestone | Status |
 |-------|-----------|--------|
 | 0 | Architecture v1 | Complete |
-| **0b** | **Architecture v2 revision** | **Current** |
-| 1 | Scaffold + CI | Next |
+| 0b | Architecture v2 revision | Complete |
+| **1** | **Scaffold + CI** | **Current** |
 | 2–16 | Database → GUI → Plugins → Installer | Planned |
 
 ## License

@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 1 project scaffold** — first runnable application code:
+  - `src/musicvault/` package skeleton following the v3 folder layout
+    (`models/`, `core/`, `db/`, `services/`, `workers/`, `plugins/`, `gui/`)
+  - `core/exceptions.py` — application exception hierarchy
+  - `core/paths.py` — cross-platform app data directory resolution
+    (`%APPDATA%/MusicVault` on Windows)
+  - `core/config.py` — versioned JSON configuration with migration chain
+  - `core/logging.py` — Loguru sinks (console, `musicvault.log`, `debug.log`, crash logs)
+  - `core/event_bus.py` — thread-safe publish/subscribe for domain events
+  - `core/container.py` — dependency injection container
+  - `app.py` — application bootstrap sequence
+  - `__main__.py` — `python -m musicvault` / `musicvault` CLI entry point
+  - `config/defaults.json` — default configuration template
+  - 43 tests (unit + integration), 97% coverage
+  - `pyproject.toml` with full dependency set and tool configuration
+    (ruff, black, mypy strict, import-linter, pytest)
+  - `.github/workflows/ci.yml` — lint, typecheck, and test on every push/PR
+  - `.github/workflows/release.yml` — PyInstaller build on version tags
+  - `CONTRIBUTING.md` — development setup and contribution guidelines
 - Architecture v3 pipeline engine refinements ([12-pipeline-engine-v3.md](docs/architecture/12-pipeline-engine-v3.md)):
   - Dedicated single-writer DB queue (eliminates SQLite lock contention)
   - ProcessPool for CPU-bound workers (hash, fingerprint, audio parse)

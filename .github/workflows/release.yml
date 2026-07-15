@@ -1,0 +1,41 @@
+name: Release
+
+# Builds the packaged Windows executable on tagged releases.
+#
+# NOTE: packaging/musicvault.spec is created in Phase 16 (see
+# docs/architecture/07-roadmap.md). Until then, pushing a version tag
+# will fail at the "Build executable" step by design — there is nothing
+# to package yet. The workflow exists now so CI gates every future commit
+# without needing a second setup pass later.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build:
+    name: Build Windows Executable
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev,build]"
+
+      - name: Run full test suite
+        run: pytest
+
+      - name: Build executable
+        run: pyinstaller packaging/musicvault.spec --noconfirm
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MusicVault-${{ github.ref_name }}-windows
+          path: dist/MusicVault/
