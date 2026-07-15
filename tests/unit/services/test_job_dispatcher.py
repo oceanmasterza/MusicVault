@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
@@ -21,6 +22,11 @@ from musicvault.workers.cpu.hash_worker import HashWorker
 from musicvault.workers.io.scanner_worker import ScannerWorker
 
 _NOW = datetime(2026, 7, 15, tzinfo=UTC)
+
+# GitHub Actions Windows runners spawn `ProcessPoolExecutor` workers much
+# more slowly than a local dev machine (cold interpreter boot + re-imports),
+# so allow a longer window there while keeping local feedback snappy.
+_POLL_TIMEOUT_SECONDS = 120.0 if os.environ.get("GITHUB_ACTIONS") == "true" else 20.0
 
 
 @pytest.fixture
@@ -45,12 +51,7 @@ def dispatcher(
     disp.stop()
 
 
-def _wait_until(predicate: Callable[[], bool], *, timeout: float = 20.0) -> bool:
-    """20s (not a tighter, snappier value) because `ProcessPoolExecutor`
-    spawn time on Windows CI runners is meaningfully slower and more
-    variable than on a local dev machine — the worker process has to
-    boot a fresh interpreter and re-import SQLAlchemy et al. before
-    `compute_hash` can even run."""
+def _wait_until(predicate: Callable[[], bool], *, timeout: float = _POLL_TIMEOUT_SECONDS) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
@@ -92,7 +93,7 @@ def test_run_cycle_dispatches_a_scan_directory_job_via_the_thread_pool(
 
     futures = dispatcher.run_cycle()
     assert len(futures) == 1
-    futures[0].result(timeout=20)  # ThreadPool path: no done-callback race
+    futures[0].result(timeout=_POLL_TIMEOUT_SECONDS)  # ThreadPool: no callback race
 
     job = job_repo.get(job_id)
     assert job is not None
@@ -117,9 +118,16 @@ def test_run_cycle_dispatches_a_hash_file_job_via_the_process_pool(
         now=_NOW,
     )
 
-    dispatcher.run_cycle()
+    futures = dispatcher.run_cycle()
+    assert len(futures) == 1
+    futures[0].result(timeout=_POLL_TIMEOUT_SECONDS)  # wait for compute_hash in the worker process
 
-    assert _wait_until(lambda: job_repo.get(job_id).status is JobStatus.COMPLETED)  # type: ignore[union-attr]
+    # handle_result runs on the pool's callback thread after the future
+    # completes — usually fast, but give CI a little slack anyway.
+    assert _wait_until(
+        lambda: job_repo.get(job_id).status is JobStatus.COMPLETED,  # type: ignore[union-attr]
+        timeout=min(_POLL_TIMEOUT_SECONDS, 30.0),
+    )
 
 
 def test_run_cycle_promotes_due_retries_before_claiming(
@@ -140,7 +148,7 @@ def test_run_cycle_promotes_due_retries_before_claiming(
     futures = dispatcher.run_cycle()
 
     assert len(futures) == 1
-    futures[0].result(timeout=20)
+    futures[0].result(timeout=_POLL_TIMEOUT_SECONDS)
     assert job_repo.get(job_id).status is JobStatus.COMPLETED  # type: ignore[union-attr]
 
 
