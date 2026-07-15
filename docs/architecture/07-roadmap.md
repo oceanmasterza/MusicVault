@@ -15,12 +15,12 @@
 
 ```
 Phase 0   ██████████ Architecture v1
-Phase 0b  ██████████ Architecture v2 revision (CURRENT)
+Phase 0b  ██████████ Architecture v2 revision
 Phase 1   ██████████ Scaffold + CI
 Phase 2   ██████████ Database (Core + UUID + jobs)
 Phase 3   ██████████ Domain models + repositories
-Phase 4   ░░░░░░░░░░ Job dispatcher + scanner/hash workers
-Phase 5   ░░░░░░░░░░ Fingerprint worker + persistence
+Phase 4   ██████████ Job dispatcher + scanner/hash workers
+Phase 5   ░░░░░░░░░░ Fingerprint worker + persistence (CURRENT)
 Phase 6   ░░░░░░░░░░ Metadata arbitrator + providers
 Phase 7   ░░░░░░░░░░ Review queue + confidence scoring
 Phase 8   ░░░░░░░░░░ Rules engine
@@ -269,13 +269,102 @@ Phase 16  ░░░░░░░░░░ Packaging + installer
 
 ## Phase 4: Job Dispatcher + Scanner/Hash Workers
 
+**Status**: Complete
+
 **Goal**: Persistent job queue with scanner and hash workers.
 
 ### Key Deliverables
-- `JobQueueService`, `JobDispatcher`
-- `ScannerWorker`, `HashWorker`
-- Crash recovery (orphaned job reset)
-- Pipeline chaining (scan → hash → fingerprint)
+- [x] `PipelineConfig` (`core/config.py`) — schema v1→v2 migration adds
+      batch size, flush interval, worker pool size, and retry backoff
+      tunables, all with defaults matching `08-performance.md`
+- [x] `WriteDTO` + `DatabaseWriter` (`db/writer.py`) — single-writer
+      background thread that batches worker-submitted rows into large
+      transactions, so concurrent workers never write SQLite directly
+- [x] `JobRepository.claim_pending` — atomic claim (one transaction:
+      select-and-mark-`running`) plus `recover_orphaned`,
+      `promote_due_retries`, `reset_for_retry`, and the aggregation
+      queries `JobStatsDTO` needs
+- [x] `JobQueueService` (`services/job_queue_service.py`) —
+      enqueue/claim/complete/fail (exponential backoff)/cancel/retry/
+      recover/stats, orchestrating `JobRepository`
+- [x] `ScannerWorker` (`workers/io/scanner_worker.py`, I/O-bound,
+      `ThreadPoolExecutor`) — walks a directory, upserts `Track` rows via
+      `DatabaseWriter`, enqueues `hash_file` for each audio file found
+- [x] `HashWorker` + `compute_hash` (`workers/cpu/hash_worker.py`,
+      CPU-bound, `ProcessPoolExecutor`) — `compute_hash` is a pure,
+      picklable function (SHA-256 + size + mtime only); `HashWorker`
+      persists the result and chains to `fingerprint_file` only when the
+      content hash actually changed
+- [x] `JobDispatcher` (`services/job_dispatcher.py`) — polls
+      `JobQueueService`, dispatches `scan_directory`/`hash_file` jobs to
+      their respective pools, and exposes `recover()` for startup crash
+      recovery
+- [x] Crash recovery: `JobDispatcher.recover()` (→
+      `JobQueueService.recover_orphaned`) resets any job left `running`
+      by a previous crash back to `retry`
+- [x] Pipeline chaining: `scan_directory` → `hash_file` → `fingerprint_file`
+      (the last hop enqueues the job but `FingerprintWorker` itself is
+      Phase 5)
+- [x] Wired into `Container.bootstrap` — the database writer and
+      dispatcher start automatically on every application startup, after
+      crash recovery runs
+
+### Scope Decisions (recorded 2026-07-15, confirmed with user before implementation)
+1. **Built and verified in 7 small increments** rather than as one large
+   change, per user request: `PipelineConfig` → `DatabaseWriter` →
+   `JobRepository.claim_pending` → `JobQueueService` → `ScannerWorker` →
+   `HashWorker` → `JobDispatcher` → `Container` wiring. Each increment was
+   fully tested (unit tests green, coverage checked) before the next began.
+2. **`JobQueueService` does not route job-status writes through
+   `DatabaseWriter`.** Job bookkeeping (`enqueue`, `mark_completed`, etc.)
+   is low-volume and latency-sensitive (the dispatcher needs to see a
+   claim's effect immediately), so it writes synchronously through
+   `JobRepository`. `DatabaseWriter` batching is reserved for the
+   high-volume domain rows (`tracks`, `file_identity`) that `ScannerWorker`/
+   `HashWorker` produce, which is exactly where batching earns its keep at
+   100k–1M-track scale.
+3. **`Container.bootstrap` starts the dispatcher automatically**, not just
+   crash recovery. This is safe even with nothing yet enqueuing jobs in
+   Phase 4: `ThreadPoolExecutor`/`ProcessPoolExecutor` only spawn actual
+   OS threads/processes lazily on first `submit()`, so an idle dispatcher
+   costs one lightweight polling thread and zero worker processes.
+   `Container.close()` stops the dispatcher (waiting for in-flight work)
+   and the writer before disposing the engine.
+
+### Acceptance Criteria
+- [x] A `scan_directory` job walks a real directory, upserts `Track` rows,
+      and enqueues one `hash_file` job per audio file found
+- [x] A `hash_file` job computes a SHA-256 hash in a worker *process*
+      (verified `ProcessPoolExecutor` behaves correctly under pytest on
+      Windows) and only enqueues `fingerprint_file` when the content hash
+      changed
+- [x] A job left `running` by a simulated crash is reset to `retry` by
+      `Container.bootstrap` on the next startup, before any new work is
+      dispatched
+- [x] `DatabaseWriter` batches multiple DTOs per flush and logs (rather
+      than crashes) on a failed batch, so one bad row never kills the
+      writer thread
+- [x] `pytest` passes (282/282, 99% coverage overall; 100% on every
+      Phase 4 module)
+- [x] `mypy`, `ruff check`, `black --check` pass
+- [x] `lint-imports` passes (3/3 contracts kept)
+- [ ] GitHub Actions green on push
+- [ ] Git commit
+
+### Notes
+- `TrackRepository.to_row`/`FileIdentityRepository.to_row` are public
+  static methods added so `ScannerWorker`/`HashWorker` can build
+  `WriteDTO` rows through the same entity-to-row mapping the repositories'
+  own `upsert`/`upsert_batch` use, instead of duplicating that logic.
+- `ScannerWorker` uses `dataclasses.replace` on the existing `Track` (when
+  one exists) rather than constructing a fresh one, so a rescan only
+  updates filesystem-derived fields (path, size, mtime) and never
+  overwrites metadata a later phase's arbitrator has already resolved.
+- `services/dto/job_dto.py` holds `JobCreate`/`JobStatsDTO` — `JobStatsDTO`
+  is assembled in `JobQueueService` from raw aggregates `JobRepository`
+  returns, not inside the repository itself, because `db` cannot import
+  from `services` (`lint-imports` contract "DB layer stays below services
+  and workers").
 
 ---
 

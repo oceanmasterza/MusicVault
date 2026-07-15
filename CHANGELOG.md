@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 4 job dispatcher + scanner/hash workers** — the first live, running
+  background pipeline, built and verified in 7 small increments:
+  - `PipelineConfig` (`core/config.py`, schema v1→v2 migration) — batch size,
+    flush interval, worker pool size, and retry backoff tunables
+  - `WriteDTO` + `DatabaseWriter` (`db/writer.py`) — single-writer background
+    thread that batches worker-submitted rows into large transactions,
+    logging (not crashing) on a bad batch
+  - `JobRepository.claim_pending`/`recover_orphaned`/`promote_due_retries`/
+    `reset_for_retry` — atomic job-state transitions plus the aggregation
+    queries behind `JobStatsDTO`
+  - `JobQueueService` (`services/job_queue_service.py`) —
+    enqueue/claim/complete/fail (exponential backoff)/cancel/retry/recover/
+    stats orchestration over `JobRepository`
+  - `ScannerWorker` (`workers/io/`, `ThreadPoolExecutor`) — walks a directory,
+    upserts `Track` rows via `DatabaseWriter`, enqueues `hash_file` per audio
+    file, preserving existing metadata on rescan via `dataclasses.replace`
+  - `HashWorker` + `compute_hash` (`workers/cpu/`, `ProcessPoolExecutor`) — a
+    pure, picklable hash function plus result handling that only chains to
+    `fingerprint_file` when the content hash actually changed
+  - `JobDispatcher` (`services/job_dispatcher.py`) — polls the queue,
+    dispatches to the two worker pools, exposes `recover()` for startup
+    crash recovery
+  - Wired into `Container.bootstrap`: the database writer and dispatcher now
+    start automatically on every application startup, after
+    `dispatcher.recover()` resets any job an earlier crash left `running`
+    back to `retry`
+  - 282 tests total (up from 213), 99% coverage overall, 100% on every
+    Phase 4 module
+
+### Added
+
 - **Phase 3 domain models** — the richer domain layer deferred from Phase 2:
   - `Track`, `Album`, `Artist` entities (`models/entities/`) + `LibraryZone`
     enum, matching the `tracks`/`albums`/`artists` tables column-for-column

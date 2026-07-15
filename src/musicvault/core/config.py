@@ -19,13 +19,39 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 from musicvault.core.exceptions import ConfigError, ConfigMigrationError, ConfigVersionError
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
+
+
+@dataclass(frozen=True)
+class PipelineConfig:
+    """Tunables for the job queue, dispatcher, and database writer thread
+    (Phase 4 — see docs/architecture/12-pipeline-engine-v3.md, "Execution
+    Engine Architecture"). Defaults match the architecture docs exactly
+    where they specify a value (batch size, flush interval, claim batch
+    size, from 08-performance.md's "Database Writer Queue" table).
+
+    ``hash_worker_processes=None`` means "use every physical core"
+    (``os.process_cpu_count()``), matching the docs' "expect near-linear
+    scaling up to physical core count." `retry_base_delay_seconds` /
+    `retry_max_delay_seconds` aren't quantified anywhere beyond
+    "exponential backoff" (10-revision-v2.md, "Resume After Crash") — this
+    implementation's own reasonable default: ``delay = base * 2**attempt``,
+    capped at ``retry_max_delay_seconds``.
+    """
+
+    db_writer_batch_size: int = 5_000
+    db_writer_flush_interval_ms: int = 500
+    job_claim_batch_size: int = 10
+    scanner_worker_threads: int = 1
+    hash_worker_processes: int | None = None
+    retry_base_delay_seconds: float = 5.0
+    retry_max_delay_seconds: float = 300.0
 
 
 @dataclass(frozen=True)
@@ -35,6 +61,7 @@ class AppConfig:
     schema_version: int = CURRENT_SCHEMA_VERSION
     log_level: str = "INFO"
     theme: str = "dark"
+    pipeline: PipelineConfig = field(default_factory=PipelineConfig)
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation suitable for JSON serialization."""
@@ -46,11 +73,21 @@ def default_config() -> AppConfig:
     return AppConfig()
 
 
+def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
+    """v1 configs predate the job pipeline (Phase 4) — add its defaults."""
+    migrated = dict(raw)
+    migrated["schema_version"] = 2
+    migrated["pipeline"] = asdict(PipelineConfig())
+    return migrated
+
+
 # Each migration receives the raw dict at version N and must return a new
 # dict upgraded to version N + 1, including the updated 'schema_version'
 # key. Register a new entry here every time CURRENT_SCHEMA_VERSION is
 # incremented; never mutate a past migration once it has shipped.
-_MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {}
+_MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {
+    1: _migrate_v1_to_v2,
+}
 
 
 def _migrate(raw: dict[str, Any]) -> dict[str, Any]:
@@ -80,6 +117,14 @@ def _migrate(raw: dict[str, Any]) -> dict[str, Any]:
 def _from_dict(raw: dict[str, Any]) -> AppConfig:
     known_fields = set(AppConfig.__dataclass_fields__)
     filtered = {key: value for key, value in raw.items() if key in known_fields}
+
+    pipeline_raw = filtered.get("pipeline")
+    if isinstance(pipeline_raw, dict):
+        pipeline_fields = set(PipelineConfig.__dataclass_fields__)
+        filtered["pipeline"] = PipelineConfig(
+            **{key: value for key, value in pipeline_raw.items() if key in pipeline_fields}
+        )
+
     return AppConfig(**filtered)
 
 

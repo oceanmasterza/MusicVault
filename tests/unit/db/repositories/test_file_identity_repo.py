@@ -73,3 +73,15 @@ def test_matches_current_file_reflects_stored_size_and_mtime(
     assert loaded is not None
     assert loaded.matches_current_file(file_size=2048, file_modified=_NOW)
     assert not loaded.matches_current_file(file_size=999, file_modified=_NOW)
+
+
+def test_to_row_matches_what_upsert_persists(engine: Engine, track_id: UUID) -> None:
+    repo = FileIdentityRepository(engine)
+    identity = _make_identity(track_id)
+
+    row = FileIdentityRepository.to_row(identity)
+
+    assert row["track_id"] == track_id.bytes
+    assert row["content_hash_sha256"] == identity.content_hash_sha256
+    repo.upsert(identity)
+    assert repo.get(track_id) == identity

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -10,11 +11,12 @@ import pytest
 from musicvault.core.config import (
     CURRENT_SCHEMA_VERSION,
     AppConfig,
+    PipelineConfig,
     default_config,
     load_config,
     save_config,
 )
-from musicvault.core.exceptions import ConfigError, ConfigVersionError
+from musicvault.core.exceptions import ConfigError, ConfigMigrationError, ConfigVersionError
 
 
 def test_default_config_uses_current_schema_version() -> None:
@@ -101,3 +103,52 @@ def test_shipped_defaults_json_matches_code_defaults() -> None:
     shipped = json.loads(defaults_path.read_text(encoding="utf-8"))
 
     assert shipped == default_config().to_dict()
+
+
+def test_default_config_includes_default_pipeline_config() -> None:
+    assert default_config().pipeline == PipelineConfig()
+
+
+def test_migrating_a_v1_config_adds_default_pipeline_section(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"schema_version": 1, "log_level": "DEBUG", "theme": "light"}),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.schema_version == CURRENT_SCHEMA_VERSION
+    assert config.log_level == "DEBUG"
+    assert config.theme == "light"
+    assert config.pipeline == PipelineConfig()
+
+
+def test_migrating_a_v1_config_persists_the_upgraded_document(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
+
+    load_config(config_path)
+
+    persisted = json.loads(config_path.read_text(encoding="utf-8"))
+    assert persisted["schema_version"] == CURRENT_SCHEMA_VERSION
+    assert persisted["pipeline"] == asdict(PipelineConfig())
+
+
+def test_load_config_raises_when_no_migration_exists_for_an_old_version(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"schema_version": 0}), encoding="utf-8")
+
+    with pytest.raises(ConfigMigrationError):
+        load_config(config_path)
+
+
+def test_load_config_round_trips_custom_pipeline_settings(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    original = AppConfig(pipeline=PipelineConfig(db_writer_batch_size=1_000))
+    save_config(original, config_path)
+
+    loaded = load_config(config_path)
+
+    assert loaded == original
+    assert loaded.pipeline.db_writer_batch_size == 1_000

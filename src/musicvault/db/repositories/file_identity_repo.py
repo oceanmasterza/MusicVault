@@ -36,6 +36,14 @@ class FileIdentityRepository:
                 conflict_columns=["track_id"],
             )
 
+    @staticmethod
+    def to_row(identity: FileIdentity) -> dict[str, object]:
+        """Public row-shape builder for callers (e.g. `HashWorker`) that
+        submit `file_identity` writes via `DatabaseWriter` instead of
+        this repository's own `upsert` — keeps one source of truth for
+        the entity-to-row mapping."""
+        return _to_row(identity)
+
     def get(self, track_id: UUID) -> FileIdentity | None:
         with self._engine.connect() as conn:
             row = conn.execute(

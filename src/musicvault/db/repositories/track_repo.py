@@ -79,6 +79,13 @@ class TrackRepository:
                 .values(zone=zone.value)
             )
 
+    @staticmethod
+    def to_row(track: Track) -> dict[str, object]:
+        """Public row-shape builder for callers (e.g. `ScannerWorker`)
+        that submit `tracks` writes via `DatabaseWriter` instead of
+        this repository's own `upsert_batch`."""
+        return _to_row(track)
+
 
 def _to_row(track: Track) -> dict[str, object]:
     return {

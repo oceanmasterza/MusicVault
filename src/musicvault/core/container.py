@@ -7,8 +7,8 @@ component trivially testable: a test builds its own container from a
 temporary directory and an in-memory configuration instead of relying on
 global state.
 
-Later phases extend this container with the job queue manager, plugin
-manager, and application services as those layers are implemented (see
+Later phases extend this container with the plugin manager and
+application services as those layers are implemented (see
 docs/architecture/07-roadmap.md).
 """
 
@@ -30,6 +30,11 @@ from musicvault.db.repositories.job_repo import JobRepository
 from musicvault.db.repositories.review_repo import ReviewRepository
 from musicvault.db.repositories.rule_repo import RuleRepository
 from musicvault.db.repositories.track_repo import TrackRepository
+from musicvault.db.writer import DatabaseWriter
+from musicvault.services.job_dispatcher import JobDispatcher
+from musicvault.services.job_queue_service import JobQueueService
+from musicvault.workers.cpu.hash_worker import HashWorker
+from musicvault.workers.io.scanner_worker import ScannerWorker
 
 
 @dataclass
@@ -46,6 +51,11 @@ class Container:
     track_repo: TrackRepository
     album_repo: AlbumRepository
     artist_repo: ArtistRepository
+    database_writer: DatabaseWriter
+    job_queue: JobQueueService
+    scanner_worker: ScannerWorker
+    hash_worker: HashWorker
+    dispatcher: JobDispatcher
     event_bus: EventBus = field(default_factory=EventBus)
 
     @classmethod
@@ -56,28 +66,75 @@ class Container:
         file and its schema get created on first run — then opens the
         (now up-to-date) database and wires the repositories that read
         and write it.
+
+        Also starts the Phase 4 pipeline: the single-writer
+        :class:`DatabaseWriter` thread and the :class:`JobDispatcher`
+        polling loop. Crash recovery (resetting jobs orphaned by a
+        previous crash back to `retry`) runs synchronously, before the
+        dispatcher starts polling — see
+        :meth:`~musicvault.services.job_dispatcher.JobDispatcher.recover`.
+        Starting the dispatcher here is safe even though nothing enqueues
+        jobs yet in Phase 4: `ThreadPoolExecutor`/`ProcessPoolExecutor`
+        only spawn actual OS threads/processes lazily, on first
+        `submit()`, so an idle dispatcher costs one lightweight polling
+        thread and no worker processes.
         """
         run_migrations(paths.database_file)
         engine = create_sqlite_engine(paths.database_file)
+
+        job_repo = JobRepository(engine)
+        track_repo = TrackRepository(engine)
+        file_identity_repo = FileIdentityRepository(engine)
+
+        database_writer = DatabaseWriter(
+            engine,
+            batch_size=config.pipeline.db_writer_batch_size,
+            flush_interval_ms=config.pipeline.db_writer_flush_interval_ms,
+        )
+        job_queue = JobQueueService(job_repo, config.pipeline)
+        scanner_worker = ScannerWorker(track_repo, file_identity_repo, database_writer, job_queue)
+        hash_worker = HashWorker(file_identity_repo, database_writer, job_queue)
+        dispatcher = JobDispatcher(
+            job_queue,
+            scanner_worker,
+            hash_worker,
+            scanner_threads=config.pipeline.scanner_worker_threads,
+            hash_processes=config.pipeline.hash_worker_processes,
+            claim_batch_size=config.pipeline.job_claim_batch_size,
+        )
+
+        database_writer.start()
+        dispatcher.recover()
+        dispatcher.start()
+
         return cls(
             paths=paths,
             config=config,
             engine=engine,
-            job_repo=JobRepository(engine),
+            job_repo=job_repo,
             review_repo=ReviewRepository(engine),
             rule_repo=RuleRepository(engine),
-            file_identity_repo=FileIdentityRepository(engine),
-            track_repo=TrackRepository(engine),
+            file_identity_repo=file_identity_repo,
+            track_repo=track_repo,
             album_repo=AlbumRepository(engine),
             artist_repo=ArtistRepository(engine),
+            database_writer=database_writer,
+            job_queue=job_queue,
+            scanner_worker=scanner_worker,
+            hash_worker=hash_worker,
+            dispatcher=dispatcher,
         )
 
     def close(self) -> None:
         """Release resources held by this container.
 
-        Disposes the database engine's connection pool. Call this during
-        application shutdown; tests should call it (or use the
-        ``container`` fixture, which does) to avoid leaking SQLite
-        connections across test cases.
+        Stops the dispatcher (waiting for any in-flight scan/hash work to
+        finish) and the database writer thread (flushing anything still
+        buffered) before disposing the database engine's connection pool.
+        Call this during application shutdown; tests should call it (or
+        use the ``container`` fixture, which does) to avoid leaking
+        SQLite connections and background threads across test cases.
         """
+        self.dispatcher.stop()
+        self.database_writer.stop()
         self.engine.dispose()

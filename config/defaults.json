@@ -1,5 +1,14 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "log_level": "INFO",
-  "theme": "dark"
+  "theme": "dark",
+  "pipeline": {
+    "db_writer_batch_size": 5000,
+    "db_writer_flush_interval_ms": 500,
+    "job_claim_batch_size": 10,
+    "scanner_worker_threads": 1,
+    "hash_worker_processes": null,
+    "retry_base_delay_seconds": 5.0,
+    "retry_max_delay_seconds": 300.0
+  }
 }

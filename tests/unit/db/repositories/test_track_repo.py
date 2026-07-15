@@ -30,6 +30,18 @@ def _make_track(library_id: UUID, **overrides: object) -> Track:
     return Track(**defaults)  # type: ignore[arg-type]
 
 
+def test_to_row_matches_what_upsert_batch_persists(engine: Engine, library_id: UUID) -> None:
+    repo = TrackRepository(engine)
+    track = _make_track(library_id)
+
+    row = TrackRepository.to_row(track)
+
+    assert row["id"] == track.id.bytes
+    assert row["file_path"] == track.file_path
+    repo.upsert(track)
+    assert repo.get_by_id(track.id) == track
+
+
 def test_upsert_and_get_by_id_round_trips_every_field(
     engine: Engine, library_id: UUID, artist_id: UUID
 ) -> None:

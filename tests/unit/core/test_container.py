@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from sqlalchemy import text
+from datetime import UTC, datetime
+
+from sqlalchemy import insert, text
 
 from musicvault.core.config import AppConfig
 from musicvault.core.container import Container
@@ -15,6 +17,14 @@ from musicvault.db.repositories.job_repo import JobRepository
 from musicvault.db.repositories.review_repo import ReviewRepository
 from musicvault.db.repositories.rule_repo import RuleRepository
 from musicvault.db.repositories.track_repo import TrackRepository
+from musicvault.db.tables import libraries
+from musicvault.db.uuid_utils import generate_uuid7, uuid_to_blob
+from musicvault.db.writer import DatabaseWriter
+from musicvault.models.entities.job import Job, JobStatus, JobType
+from musicvault.services.job_dispatcher import JobDispatcher
+from musicvault.services.job_queue_service import JobQueueService
+from musicvault.workers.cpu.hash_worker import HashWorker
+from musicvault.workers.io.scanner_worker import ScannerWorker
 
 
 def test_bootstrap_wires_provided_paths_and_config(
@@ -89,6 +99,57 @@ def test_bootstrap_wires_all_phase_3_repositories(
     assert isinstance(container.album_repo, AlbumRepository)
     assert isinstance(container.artist_repo, ArtistRepository)
     container.close()
+
+
+def test_bootstrap_wires_the_phase_4_pipeline(app_paths: AppPaths, app_config: AppConfig) -> None:
+    container = Container.bootstrap(paths=app_paths, config=app_config)
+
+    assert isinstance(container.database_writer, DatabaseWriter)
+    assert isinstance(container.job_queue, JobQueueService)
+    assert isinstance(container.scanner_worker, ScannerWorker)
+    assert isinstance(container.hash_worker, HashWorker)
+    assert isinstance(container.dispatcher, JobDispatcher)
+    container.close()
+
+
+def test_bootstrap_recovers_orphaned_jobs_on_startup(
+    app_paths: AppPaths, app_config: AppConfig
+) -> None:
+    """A `running` job left behind by a previous crash must be reset to
+    `retry` as part of `bootstrap`, before any new work is dispatched."""
+    first = Container.bootstrap(paths=app_paths, config=app_config)
+    library_id = generate_uuid7()
+    now = datetime.now(UTC).isoformat()
+    with first.engine.begin() as conn:
+        conn.execute(
+            insert(libraries).values(
+                id=uuid_to_blob(library_id),
+                name="Test Library",
+                incoming_path="C:/incoming",
+                staging_path="C:/staging",
+                library_path="C:/library",
+                archive_path="C:/archive",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    job = Job(
+        id=generate_uuid7(),
+        library_id=library_id,
+        job_type=JobType.SCAN_DIRECTORY,
+        status=JobStatus.RUNNING,
+        payload={},
+        created_at=datetime.now(UTC),
+    )
+    first.job_repo.create(job)
+    first.close()
+
+    second = Container.bootstrap(paths=app_paths, config=app_config)
+
+    recovered = second.job_repo.get(job.id)
+    assert recovered is not None
+    assert recovered.status == JobStatus.RETRY
+    second.close()
 
 
 def test_bootstrap_is_safe_to_call_twice_against_the_same_database(
