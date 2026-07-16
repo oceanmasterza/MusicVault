@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 5 fingerprint worker + Chromaprint persistence** — the next
+  pipeline stage after hashing:
+  - `FingerprintProvider` / `FingerprintResult`
+    (`models/interfaces/fingerprint.py`)
+  - Built-in Chromaprint provider (`plugins/builtin/chromaprint/`) via
+    `pyacoustid` / `fpcalc`
+  - `FingerprintWorker` + `compute_fingerprint` (`workers/cpu/`) —
+    ProcessPool Chromaprint generation, persists fingerprint columns on
+    `file_identity`, chains to `identify_metadata` (MetadataWorker is
+    Phase 6)
+  - Shared CPU process pool in `JobDispatcher` for hash + fingerprint
+  - Defensive skip when a fingerprint is already stored (crash-recovery
+    re-delivery)
+  - `HashWorker` now preserves fingerprint fields on unchanged content
+    hashes and passes `file_path` into `fingerprint_file` payloads
+  - AcoustID HTTP lookup deferred to Phase 6 (metadata identification)
+  - 298 tests total (up from 282), 98% coverage overall, 100% on every
+    Phase 5 module
+
+### Added
+
 - **Phase 4 job dispatcher + scanner/hash workers** — the first live, running
   background pipeline, built and verified in 7 small increments:
   - `PipelineConfig` (`core/config.py`, schema v1→v2 migration) — batch size,

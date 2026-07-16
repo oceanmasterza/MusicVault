@@ -33,6 +33,7 @@ from musicvault.db.repositories.track_repo import TrackRepository
 from musicvault.db.writer import DatabaseWriter
 from musicvault.services.job_dispatcher import JobDispatcher
 from musicvault.services.job_queue_service import JobQueueService
+from musicvault.workers.cpu.fingerprint_worker import FingerprintWorker
 from musicvault.workers.cpu.hash_worker import HashWorker
 from musicvault.workers.io.scanner_worker import ScannerWorker
 
@@ -55,6 +56,7 @@ class Container:
     job_queue: JobQueueService
     scanner_worker: ScannerWorker
     hash_worker: HashWorker
+    fingerprint_worker: FingerprintWorker
     dispatcher: JobDispatcher
     event_bus: EventBus = field(default_factory=EventBus)
 
@@ -67,14 +69,14 @@ class Container:
         (now up-to-date) database and wires the repositories that read
         and write it.
 
-        Also starts the Phase 4 pipeline: the single-writer
+        Also starts the pipeline: the single-writer
         :class:`DatabaseWriter` thread and the :class:`JobDispatcher`
         polling loop. Crash recovery (resetting jobs orphaned by a
         previous crash back to `retry`) runs synchronously, before the
         dispatcher starts polling — see
         :meth:`~musicvault.services.job_dispatcher.JobDispatcher.recover`.
         Starting the dispatcher here is safe even though nothing enqueues
-        jobs yet in Phase 4: `ThreadPoolExecutor`/`ProcessPoolExecutor`
+        jobs yet: `ThreadPoolExecutor`/`ProcessPoolExecutor`
         only spawn actual OS threads/processes lazily, on first
         `submit()`, so an idle dispatcher costs one lightweight polling
         thread and no worker processes.
@@ -94,10 +96,12 @@ class Container:
         job_queue = JobQueueService(job_repo, config.pipeline)
         scanner_worker = ScannerWorker(track_repo, file_identity_repo, database_writer, job_queue)
         hash_worker = HashWorker(file_identity_repo, database_writer, job_queue)
+        fingerprint_worker = FingerprintWorker(file_identity_repo, database_writer, job_queue)
         dispatcher = JobDispatcher(
             job_queue,
             scanner_worker,
             hash_worker,
+            fingerprint_worker,
             scanner_threads=config.pipeline.scanner_worker_threads,
             hash_processes=config.pipeline.hash_worker_processes,
             claim_batch_size=config.pipeline.job_claim_batch_size,
@@ -122,6 +126,7 @@ class Container:
             job_queue=job_queue,
             scanner_worker=scanner_worker,
             hash_worker=hash_worker,
+            fingerprint_worker=fingerprint_worker,
             dispatcher=dispatcher,
         )
 

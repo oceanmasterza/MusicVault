@@ -20,8 +20,8 @@ Phase 1   ██████████ Scaffold + CI
 Phase 2   ██████████ Database (Core + UUID + jobs)
 Phase 3   ██████████ Domain models + repositories
 Phase 4   ██████████ Job dispatcher + scanner/hash workers
-Phase 5   ░░░░░░░░░░ Fingerprint worker + persistence (CURRENT)
-Phase 6   ░░░░░░░░░░ Metadata arbitrator + providers
+Phase 5   ██████████ Fingerprint worker + persistence
+Phase 6   ░░░░░░░░░░ Metadata arbitrator + providers (CURRENT)
 Phase 7   ░░░░░░░░░░ Review queue + confidence scoring
 Phase 8   ░░░░░░░░░░ Rules engine
 Phase 9   ░░░░░░░░░░ Duplicate worker + quality scoring
@@ -370,13 +370,52 @@ Phase 16  ░░░░░░░░░░ Packaging + installer
 
 ## Phase 5: Fingerprint Worker
 
+**Status**: Complete
+
 **Goal**: Chromaprint generation with permanent storage and skip logic.
 
 ### Key Deliverables
-- `FingerprintWorker`
-- `file_identity` persistence
-- Skip unchanged files
-- AcoustID plugin
+- [x] `FingerprintProvider` protocol + `FingerprintResult`
+      (`models/interfaces/fingerprint.py`)
+- [x] Built-in Chromaprint provider (`plugins/builtin/chromaprint/`) wrapping
+      `pyacoustid.fingerprint_file` / `fpcalc`
+- [x] `FingerprintWorker` + `compute_fingerprint` (`workers/cpu/`, shared
+      CPU `ProcessPoolExecutor` with hash) — persists
+      `fingerprint_data` / `fingerprint_duration` / `fingerprint_hash` on
+      `file_identity`, chains to `identify_metadata`
+- [x] Skip unchanged files — scanner size/mtime skip + hash content-hash
+      skip (Phase 4) plus a defensive "already fingerprinted" early-complete
+      path for crash-recovery re-delivery
+- [x] `HashWorker` fix — preserves existing fingerprint fields when the
+      content hash is unchanged, and passes `file_path` into
+      `fingerprint_file` job payloads
+- [x] Wired into `JobDispatcher` + `Container.bootstrap`
+- [x] AcoustID *HTTP* lookup deliberately deferred to Phase 6
+      (MetadataWorker / metadata providers) — Chromaprint generation is
+      the FingerprintProvider; AcoustID's MusicBrainz ID lookup is
+      metadata identification
+
+### Scope Decisions (recorded 2026-07-16)
+1. **AcoustID HTTP deferred to Phase 6.** The roadmap listed "AcoustID
+   plugin" under Phase 5, but the pipeline docs assign AcoustID HTTP to
+   MetadataWorker (I/O tier). Phase 5 ships Chromaprint generation + the
+   FingerprintProvider protocol; storing `acoustid_id`/`acoustid_score`
+   happens when metadata identification is built.
+2. **Shared CPU ProcessPool** for hash and fingerprint (both Tier 1) —
+   one pool sized by `hash_worker_processes`, not a second pool.
+3. **Tests mock Chromaprint** — CI runners may not have `fpcalc`; unit
+   tests monkeypatch `generate_chromaprint` / `acoustid.fingerprint_file`.
+
+### Acceptance Criteria
+- [x] A `fingerprint_file` job stores Chromaprint fields on `file_identity`
+      and enqueues `identify_metadata`
+- [x] Unchanged files are skipped by the existing scan/hash chain; already-
+      fingerprinted re-deliveries complete without recomputing
+- [x] `pytest` passes (298/298, 98% coverage overall; 100% on Phase 5 modules)
+- [x] `mypy`, `ruff check`, `black --check` pass
+- [x] `lint-imports` passes (3/3 contracts kept)
+- [ ] GitHub Actions green on push
+- [ ] Git commit
 
 ---
 

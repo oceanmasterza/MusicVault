@@ -62,7 +62,12 @@ def test_handle_result_marks_the_job_failed_on_error(
     track_id: UUID,
 ) -> None:
     worker = HashWorker(file_identity_repo, database_writer, job_queue)
-    job_id = job_queue.enqueue(JobType.HASH_FILE, library_id, {"track_id": str(track_id)}, now=_NOW)
+    job_id = job_queue.enqueue(
+        JobType.HASH_FILE,
+        library_id,
+        {"track_id": str(track_id), "file_path": "C:/library/track.flac"},
+        now=_NOW,
+    )
     job = job_repo.get(job_id)
     assert job is not None
 
@@ -83,7 +88,12 @@ def test_handle_result_for_a_new_track_persists_identity_and_chains_to_fingerpri
     track_id: UUID,
 ) -> None:
     worker = HashWorker(file_identity_repo, database_writer, job_queue)
-    job_id = job_queue.enqueue(JobType.HASH_FILE, library_id, {"track_id": str(track_id)}, now=_NOW)
+    job_id = job_queue.enqueue(
+        JobType.HASH_FILE,
+        library_id,
+        {"track_id": str(track_id), "file_path": "C:/library/track.flac"},
+        now=_NOW,
+    )
     job = job_repo.get(job_id)
     assert job is not None
 
@@ -107,6 +117,93 @@ def test_handle_result_for_a_new_track_persists_identity_and_chains_to_fingerpri
     assert job_repo.get(job_id).status is JobStatus.COMPLETED  # type: ignore[union-attr]
 
 
+def test_handle_result_preserves_existing_fingerprint_when_hash_unchanged(
+    job_repo: JobRepository,
+    job_queue: JobQueueService,
+    file_identity_repo: FileIdentityRepository,
+    database_writer: DatabaseWriter,
+    library_id: UUID,
+    track_id: UUID,
+) -> None:
+    file_identity_repo.upsert(
+        FileIdentity(
+            track_id=track_id,
+            content_hash_sha256="a" * 64,
+            file_size=1024,
+            file_modified=_NOW,
+            fingerprint_data=b"chromaprint-bytes",
+            fingerprint_duration=180.0,
+            fingerprint_hash="fp" * 32,
+        )
+    )
+    worker = HashWorker(file_identity_repo, database_writer, job_queue)
+    job_id = job_queue.enqueue(
+        JobType.HASH_FILE,
+        library_id,
+        {"track_id": str(track_id), "file_path": "C:/library/track.flac"},
+        now=_NOW,
+    )
+    job = job_repo.get(job_id)
+    assert job is not None
+
+    worker.handle_result(
+        job,
+        {
+            "track_id": str(track_id),
+            "content_hash_sha256": "a" * 64,
+            "file_size": 1024,
+            "file_modified": _NOW.isoformat(),
+        },
+    )
+    database_writer.stop()
+
+    identity = file_identity_repo.get(track_id)
+    assert identity is not None
+    assert identity.fingerprint_data == b"chromaprint-bytes"
+    assert identity.fingerprint_duration == 180.0
+    assert identity.fingerprint_hash == "fp" * 32
+
+
+def test_handle_result_includes_file_path_on_fingerprint_jobs(
+    job_repo: JobRepository,
+    job_queue: JobQueueService,
+    file_identity_repo: FileIdentityRepository,
+    database_writer: DatabaseWriter,
+    library_id: UUID,
+    track_id: UUID,
+) -> None:
+    worker = HashWorker(file_identity_repo, database_writer, job_queue)
+    job_id = job_queue.enqueue(
+        JobType.HASH_FILE,
+        library_id,
+        {"track_id": str(track_id), "file_path": "C:/library/song.flac"},
+        now=_NOW,
+    )
+    job = job_repo.get(job_id)
+    assert job is not None
+
+    worker.handle_result(
+        job,
+        {
+            "track_id": str(track_id),
+            "content_hash_sha256": "c" * 64,
+            "file_size": 99,
+            "file_modified": _NOW.isoformat(),
+        },
+    )
+
+    fingerprint_jobs = [
+        j
+        for j in job_repo.list_by_status(JobStatus.PENDING, library_id=library_id)
+        if j.job_type is JobType.FINGERPRINT_FILE
+    ]
+    assert len(fingerprint_jobs) == 1
+    assert fingerprint_jobs[0].payload == {
+        "track_id": str(track_id),
+        "file_path": "C:/library/song.flac",
+    }
+
+
 def test_handle_result_skips_fingerprint_when_content_hash_is_unchanged(
     job_repo: JobRepository,
     job_queue: JobQueueService,
@@ -124,7 +221,12 @@ def test_handle_result_skips_fingerprint_when_content_hash_is_unchanged(
         )
     )
     worker = HashWorker(file_identity_repo, database_writer, job_queue)
-    job_id = job_queue.enqueue(JobType.HASH_FILE, library_id, {"track_id": str(track_id)}, now=_NOW)
+    job_id = job_queue.enqueue(
+        JobType.HASH_FILE,
+        library_id,
+        {"track_id": str(track_id), "file_path": "C:/library/track.flac"},
+        now=_NOW,
+    )
     job = job_repo.get(job_id)
     assert job is not None
 
@@ -161,7 +263,12 @@ def test_handle_result_chains_to_fingerprint_when_content_hash_changed(
         )
     )
     worker = HashWorker(file_identity_repo, database_writer, job_queue)
-    job_id = job_queue.enqueue(JobType.HASH_FILE, library_id, {"track_id": str(track_id)}, now=_NOW)
+    job_id = job_queue.enqueue(
+        JobType.HASH_FILE,
+        library_id,
+        {"track_id": str(track_id), "file_path": "C:/library/track.flac"},
+        now=_NOW,
+    )
     job = job_repo.get(job_id)
     assert job is not None
 

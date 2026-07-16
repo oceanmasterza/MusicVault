@@ -19,6 +19,7 @@ from musicvault.db.writer import DatabaseWriter
 from musicvault.models.entities.job import JobStatus, JobType
 from musicvault.services.job_dispatcher import JobDispatcher
 from musicvault.services.job_queue_service import JobQueueService
+from musicvault.workers.cpu.fingerprint_worker import FingerprintWorker
 from musicvault.workers.cpu.hash_worker import HashWorker
 from musicvault.workers.io.scanner_worker import ScannerWorker
 
@@ -33,7 +34,8 @@ class _SynchronousExecutor:
     exercise the dispatcher's submit/done-callback wiring without spawning
     real worker processes — which is slow and flaky on GitHub Actions
     Windows runners. :func:`~musicvault.workers.cpu.hash_worker.compute_hash`
-    itself is covered separately in ``test_hash_worker.py``.
+    and :func:`~musicvault.workers.cpu.fingerprint_worker.compute_fingerprint`
+    are covered separately in their own worker test modules.
     """
 
     def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
@@ -57,19 +59,21 @@ def dispatcher(
 ) -> Iterator[JobDispatcher]:
     scanner = ScannerWorker(track_repo, file_identity_repo, database_writer, job_queue)
     hasher = HashWorker(file_identity_repo, database_writer, job_queue)
+    fingerprinter = FingerprintWorker(file_identity_repo, database_writer, job_queue)
     disp = JobDispatcher(
         job_queue,
         scanner,
         hasher,
+        fingerprinter,
         scanner_threads=1,
         hash_processes=1,
         claim_batch_size=10,
         poll_interval_seconds=0.05,
     )
     # Swap out the real process pool before any work is submitted.
-    real_hash_pool = disp._hash_pool  # noqa: SLF001
-    disp._hash_pool = _SynchronousExecutor()  # noqa: SLF001
-    real_hash_pool.shutdown(wait=False, cancel_futures=True)
+    real_cpu_pool = disp._cpu_pool  # noqa: SLF001
+    disp._cpu_pool = _SynchronousExecutor()  # type: ignore[assignment]  # noqa: SLF001
+    real_cpu_pool.shutdown(wait=False, cancel_futures=True)
     yield disp
     disp.stop()
 
@@ -141,8 +145,11 @@ def test_run_cycle_dispatches_a_hash_file_job_and_runs_its_done_callback(
     )
 
     futures = dispatcher.run_cycle()
-    assert len(futures) == 1
-    futures[0].result(timeout=_POLL_TIMEOUT_SECONDS)
+    # Sync executor runs hash immediately and may enqueue+claim fingerprint
+    # in the same cycle — wait on every future returned.
+    assert len(futures) >= 1
+    for future in futures:
+        future.result(timeout=_POLL_TIMEOUT_SECONDS)
 
     job = job_repo.get(job_id)
     assert job is not None
@@ -220,7 +227,7 @@ def test_run_scan_marks_the_job_failed_if_the_scanner_worker_raises_unexpectedly
     assert updated.error_message == "scanner exploded"
 
 
-def test_handle_hash_result_marks_the_job_failed_if_handle_result_raises(
+def test_handle_cpu_result_marks_the_job_failed_if_handle_result_raises(
     dispatcher: JobDispatcher,
     job_queue: JobQueueService,
     job_repo: JobRepository,
@@ -238,12 +245,92 @@ def test_handle_hash_result_marks_the_job_failed_if_handle_result_raises(
     future: Future[dict[str, object]] = Future()
     future.set_result({"track_id": str(library_id)})
 
-    dispatcher._handle_hash_result(job, future)  # noqa: SLF001
+    dispatcher._handle_cpu_result(  # noqa: SLF001
+        job, future, dispatcher._hash_worker.handle_result, "hash_file"  # noqa: SLF001
+    )
 
     updated = job_repo.get(job_id)
     assert updated is not None
     assert updated.status is JobStatus.RETRY
     assert updated.error_message == "handler exploded"
+
+
+def test_run_cycle_skips_process_pool_when_fingerprint_already_exists(
+    dispatcher: JobDispatcher,
+    job_queue: JobQueueService,
+    job_repo: JobRepository,
+    file_identity_repo: FileIdentityRepository,
+    library_id: UUID,
+    track_id: UUID,
+) -> None:
+    from musicvault.models.value_objects.file_identity import FileIdentity
+
+    file_identity_repo.upsert(
+        FileIdentity(
+            track_id=track_id,
+            content_hash_sha256="a" * 64,
+            file_size=1,
+            file_modified=_NOW,
+            fingerprint_data=b"existing",
+            fingerprint_hash="ff" * 32,
+        )
+    )
+    job_id = job_queue.enqueue(
+        JobType.FINGERPRINT_FILE,
+        library_id,
+        {"track_id": str(track_id), "file_path": "C:/x.flac"},
+        now=_NOW,
+    )
+
+    futures = dispatcher.run_cycle()
+
+    assert futures == []
+    assert job_repo.get(job_id).status is JobStatus.COMPLETED  # type: ignore[union-attr]
+    assert any(
+        j.job_type is JobType.IDENTIFY_METADATA
+        for j in job_repo.list_by_status(JobStatus.PENDING, library_id=library_id)
+    )
+
+
+def test_run_cycle_dispatches_a_fingerprint_file_job(
+    dispatcher: JobDispatcher,
+    job_queue: JobQueueService,
+    job_repo: JobRepository,
+    file_identity_repo: FileIdentityRepository,
+    library_id: UUID,
+    track_id: UUID,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from musicvault.models.interfaces.fingerprint import FingerprintResult
+    from musicvault.models.value_objects.file_identity import FileIdentity
+
+    audio = tmp_path / "track.flac"
+    audio.write_bytes(b"audio")
+    file_identity_repo.upsert(
+        FileIdentity(
+            track_id=track_id,
+            content_hash_sha256="a" * 64,
+            file_size=5,
+            file_modified=_NOW,
+        )
+    )
+    monkeypatch.setattr(
+        "musicvault.workers.cpu.fingerprint_worker.generate_chromaprint",
+        lambda _path: FingerprintResult(10.0, b"fp", "aa" * 32),
+    )
+    job_id = job_queue.enqueue(
+        JobType.FINGERPRINT_FILE,
+        library_id,
+        {"track_id": str(track_id), "file_path": str(audio)},
+        now=_NOW,
+    )
+
+    futures = dispatcher.run_cycle()
+    assert len(futures) == 1
+    futures[0].result(timeout=_POLL_TIMEOUT_SECONDS)
+
+    assert job_repo.get(job_id).status is JobStatus.COMPLETED  # type: ignore[union-attr]
 
 
 def test_poll_loop_survives_a_run_cycle_exception_and_keeps_polling(

@@ -29,20 +29,15 @@ Collectors, audiophiles, and self-hosted media server operators using **Navidrom
 
 ## Status
 
-**Phase 4 — Job Dispatcher + Scanner/Hash Workers** (current)
+**Phase 5 — Fingerprint Worker** (current)
 
-Architecture is finalized (v3). The runnable scaffold exists: DI container, versioned
-config, logging, event bus, and CI pipeline. The database layer is in place: SQLAlchemy
-Core tables (all 15 fully-specified v2 tables), UUIDv7 primary keys, Alembic migrations,
-and repositories for jobs, reviews, rules, file identity, tracks, albums, and artists —
-all wired into application startup, which auto-creates and migrates the database on
-first run. The domain layer includes `Track`/`Album`/`Artist` entities, `QualityScorer`,
-`RenameEngine`, and a rules AST for condition evaluation. The processing pipeline is now
-live: a single-writer `DatabaseWriter` thread, a `JobQueueService` with crash recovery
-and exponential-backoff retries, and a `JobDispatcher` that polls the queue and runs
-`ScannerWorker` (directory scanning, thread pool) and `HashWorker` (SHA-256 hashing,
-process pool) — all started automatically on application startup.
-`python -m musicvault` bootstraps, recovers any orphaned jobs, and exits cleanly. See
+Architecture is finalized (v3). The runnable scaffold, database layer, domain
+models, and job pipeline are in place. The processing pipeline now runs
+`ScannerWorker` → `HashWorker` → `FingerprintWorker` (Chromaprint via
+`pyacoustid`/`fpcalc`, persisted on `file_identity`, then chains to
+`identify_metadata` for Phase 6). Unchanged files are skipped via size/mtime
+and content-hash checks. `python -m musicvault` bootstraps, recovers any
+orphaned jobs, and exits cleanly. See
 [Architecture Documentation](docs/architecture/README.md).
 
 ```powershell
@@ -51,7 +46,7 @@ cd musicvault
 python -m venv .venv
 .venv\Scripts\activate
 pip install -e ".[dev]"
-pytest              # 282 passed
+pytest              # 298 passed
 python -m musicvault  # MusicVault 0.1.0
 ```
 
@@ -110,8 +105,9 @@ python -m musicvault  # MusicVault 0.1.0
 | 1 | Scaffold + CI | Complete |
 | 2 | Database Layer | Complete |
 | 3 | Domain Models | Complete |
-| **4** | **Job Dispatcher + Scanner/Hash Workers** | **Current** |
-| 5–16 | Fingerprint Worker → GUI → Plugins → Installer | Planned |
+| 4 | Job Dispatcher + Scanner/Hash Workers | Complete |
+| **5** | **Fingerprint Worker** | **Current** |
+| 6–16 | Metadata Arbitrator → GUI → Plugins → Installer | Planned |
 
 ## License
 

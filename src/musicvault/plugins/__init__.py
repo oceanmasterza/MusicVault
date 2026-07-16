@@ -1,5 +1,7 @@
 """Plugin system: metadata providers, artwork providers, media server integrations.
 
-Populated starting in Phase 6 (metadata providers) and Phase 15 (media servers).
-See docs/architecture/05-plugin-api.md.
+Phase 5 adds the Chromaprint fingerprint provider
+(:mod:`musicvault.plugins.builtin.chromaprint`). Metadata providers
+(MusicBrainz, AcoustID HTTP, …) start in Phase 6; media servers in
+Phase 15. See docs/architecture/05-plugin-api.md.
 """

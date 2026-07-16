@@ -18,6 +18,7 @@ runs back in the main process once the pool's `Future` completes (see
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -90,16 +91,32 @@ class HashWorker:
 
         track_id = UUID(result["track_id"])
         new_hash = result["content_hash_sha256"]
+        file_size = result["file_size"]
+        file_modified = datetime.fromisoformat(result["file_modified"])
         previous = self._file_identity_repo.get(track_id)
         content_changed = previous is None or previous.content_hash_sha256 != new_hash
+        now = datetime.now(UTC)
 
-        identity = FileIdentity(
-            track_id=track_id,
-            content_hash_sha256=new_hash,
-            file_size=result["file_size"],
-            file_modified=datetime.fromisoformat(result["file_modified"]),
-            hash_computed_at=datetime.now(UTC),
-        )
+        # Content changed → wipe stale fingerprint/AcoustID fields.
+        # Content unchanged → preserve them (a size/mtime blip can still
+        # hash identically; overwriting here would force needless
+        # Chromaprint work on the next chain hop).
+        if previous is not None and not content_changed:
+            identity = replace(
+                previous,
+                content_hash_sha256=new_hash,
+                file_size=file_size,
+                file_modified=file_modified,
+                hash_computed_at=now,
+            )
+        else:
+            identity = FileIdentity(
+                track_id=track_id,
+                content_hash_sha256=new_hash,
+                file_size=file_size,
+                file_modified=file_modified,
+                hash_computed_at=now,
+            )
         self._writer.submit(
             WriteDTO(
                 table="file_identity",
@@ -114,7 +131,10 @@ class HashWorker:
             self._job_queue.enqueue(
                 JobType.FINGERPRINT_FILE,
                 job.library_id,
-                {"track_id": str(track_id)},
+                {
+                    "track_id": str(track_id),
+                    "file_path": job.payload["file_path"],
+                },
                 parent_job_id=job.id,
             )
         self._job_queue.mark_completed(job.id)

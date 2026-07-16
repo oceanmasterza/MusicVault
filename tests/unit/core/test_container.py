@@ -23,6 +23,7 @@ from musicvault.db.writer import DatabaseWriter
 from musicvault.models.entities.job import Job, JobStatus, JobType
 from musicvault.services.job_dispatcher import JobDispatcher
 from musicvault.services.job_queue_service import JobQueueService
+from musicvault.workers.cpu.fingerprint_worker import FingerprintWorker
 from musicvault.workers.cpu.hash_worker import HashWorker
 from musicvault.workers.io.scanner_worker import ScannerWorker
 
@@ -110,6 +111,7 @@ def test_bootstrap_wires_the_phase_4_pipeline(app_paths: AppPaths, app_config: A
     assert isinstance(container.job_queue, JobQueueService)
     assert isinstance(container.scanner_worker, ScannerWorker)
     assert isinstance(container.hash_worker, HashWorker)
+    assert isinstance(container.fingerprint_worker, FingerprintWorker)
     assert isinstance(container.dispatcher, JobDispatcher)
     container.close()
 
