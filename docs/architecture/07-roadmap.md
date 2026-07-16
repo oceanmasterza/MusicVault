@@ -414,8 +414,8 @@ Phase 16  ░░░░░░░░░░ Packaging + installer
 - [x] `pytest` passes (298/298, 98% coverage overall; 100% on Phase 5 modules)
 - [x] `mypy`, `ruff check`, `black --check` pass
 - [x] `lint-imports` passes (3/3 contracts kept)
-- [ ] GitHub Actions green on push
-- [ ] Git commit
+- [x] GitHub Actions green on push (verified: https://github.com/oceanmasterza/MusicVault/actions/runs/29473149169)
+- [x] Git commit: `feat: Phase 5 FingerprintWorker with Chromaprint persistence`
 
 ---
 
