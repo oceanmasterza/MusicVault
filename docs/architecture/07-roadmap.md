@@ -466,8 +466,8 @@ Phase 16  ░░░░░░░░░░ Packaging + installer
 - [x] `pytest` passes (333/333)
 - [x] `mypy`, `ruff check`, `black --check` pass
 - [x] `lint-imports` passes (3/3 contracts kept)
-- [ ] GitHub Actions green on push
-- [ ] Git commit: `feat: Phase 6 MetadataArbitrator + metadata providers`
+- [x] GitHub Actions green on push (verified: https://github.com/oceanmasterza/MusicVault/actions/runs/29475808849)
+- [x] Git commit: `feat: Phase 6 MetadataArbitrator + metadata providers`
 
 ---
 
