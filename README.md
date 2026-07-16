@@ -29,17 +29,16 @@ Collectors, audiophiles, and self-hosted media server operators using **Navidrom
 
 ## Status
 
-**Phase 7 — Review Queue** (current)
+**Phase 8 — Rules Engine** (current)
 
 Architecture is finalized (v3). The runnable scaffold, database layer, domain
 models, and job pipeline are in place. The processing pipeline runs
-`ScannerWorker` → `HashWorker` → `FingerprintWorker` → `MetadataWorker`
-(AcoustID / MusicBrainz / local tags / filename, per-field confidence on
-`metadata_confidence`). When confidence is below threshold, tracks are
-flagged `needs_review` and a pending `review_items` row is created via
-`ReviewQueueService` (approve / reject / defer / edit). Unchanged files
-are skipped via size/mtime and content-hash checks. `python -m musicvault`
-bootstraps, recovers any orphaned jobs, and exits cleanly. See
+`ScannerWorker` → `HashWorker` → `FingerprintWorker` → `MetadataWorker` →
+`RuleWorker`. Uncertain metadata lands in the review queue; automation
+rules (VA detection, low bitrate, archive-when-FLAC stub) evaluate after
+identify. Unchanged files are skipped via size/mtime and content-hash
+checks. `python -m musicvault` bootstraps, recovers any orphaned jobs, and
+exits cleanly. See
 [Architecture Documentation](docs/architecture/README.md).
 
 ```powershell

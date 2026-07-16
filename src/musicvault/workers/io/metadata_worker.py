@@ -1,11 +1,10 @@
 """MetadataWorker — runs `identify_metadata` jobs through MetadataArbitrator.
 
-I/O-bound (Tier 2 — HTTP + Mutagen). Does **not** enqueue
-`fetch_artwork` / `detect_duplicates` / `evaluate_rules` yet — those
-workers arrive in later phases. When overall confidence is below
-threshold, sets ``tracks.needs_review`` and creates a
-:class:`~musicvault.models.entities.review_item.ReviewItem` via
-:class:`~musicvault.services.review_queue_service.ReviewQueueService`.
+I/O-bound (Tier 2 — HTTP + Mutagen). When overall confidence is below
+threshold, sets ``tracks.needs_review`` and creates a review item via
+ReviewQueueService. Always enqueues ``evaluate_rules`` for
+:class:`~musicvault.workers.io.rule_worker.RuleWorker`. Artwork and
+duplicate jobs remain later phases.
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ from uuid import UUID
 from musicvault.db.repositories.file_identity_repo import FileIdentityRepository
 from musicvault.db.repositories.metadata_confidence_repo import MetadataConfidenceRepository
 from musicvault.db.repositories.track_repo import TrackRepository
-from musicvault.models.entities.job import Job
+from musicvault.models.entities.job import Job, JobType
 from musicvault.models.entities.track import Track
 from musicvault.models.interfaces.metadata import FingerprintData
 from musicvault.models.value_objects.field_confidence import FieldConfidence
@@ -82,6 +81,13 @@ class MetadataWorker:
                 now=now,
             )
 
+        self._job_queue.enqueue(
+            JobType.EVALUATE_RULES,
+            job.library_id,
+            {"track_id": str(track_id)},
+            parent_job_id=job.id,
+            now=now,
+        )
         self._job_queue.mark_completed(job.id)
 
 

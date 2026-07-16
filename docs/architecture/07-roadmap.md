@@ -23,8 +23,8 @@ Phase 4   ██████████ Job dispatcher + scanner/hash workers
 Phase 5   ██████████ Fingerprint worker + persistence
 Phase 6   ██████████ Metadata arbitrator + providers
 Phase 7   ██████████ Review queue + confidence scoring
-Phase 8   ░░░░░░░░░░ Rules engine (CURRENT)
-Phase 9   ░░░░░░░░░░ Duplicate worker + quality scoring
+Phase 8   ██████████ Rules engine
+Phase 9   ░░░░░░░░░░ Duplicate worker + quality scoring (CURRENT)
 Phase 10  ░░░░░░░░░░ Organizer + staging zones + watch folder
 Phase 11  ░░░░░░░░░░ Artwork worker
 Phase 12  ░░░░░░░░░░ Rollback engine
@@ -490,7 +490,8 @@ Phase 16  ░░░░░░░░░░ Packaging + installer
 - Approve clears `tracks.needs_review`; does **not** move zones (Phase 10)
 - Reject / defer leave `needs_review`; deferred items leave the pending list
 - `ReviewItemAddedEvent` on `EventBus` for future Qt badge refresh
-- GUI review page is Phase 14; artwork / duplicates / rules enqueue still later
+- GUI review page is Phase 14; artwork / duplicates enqueue still later
+  (rules enqueue delivered in Phase 8)
 
 ### Acceptance Criteria
 - [x] Low-confidence identification creates a pending review item
@@ -510,6 +511,27 @@ Phase 16  ░░░░░░░░░░ Packaging + installer
 - `RulesEngine` with condition evaluation
 - Default rules (archive MP3, detect VA, flag low quality)
 - Rule CRUD via config/API (GUI in Phase 14)
+
+### Implementation notes (service layer)
+- `RulesEngine` — `build_context`, `evaluate` / `evaluate_batch`,
+  `apply_matches`, `ensure_defaults`, CRUD (`create_rule` / `update_rule` /
+  `delete_rule` / `list_rules` / `set_enabled`)
+- `RuleWorker` + dispatcher route for `evaluate_rules` (shared I/O pool)
+- `MetadataWorker` always enqueues `evaluate_rules` after identify
+- Shipped defaults: Archive MP3 (needs Phase 9 `has_lossless_duplicate`),
+  Detect Various Artists (`set_artist` + `flag_review`), Flag low bitrate
+  (`< 192` → `low_quality` review)
+- `move_to_zone` parks a `RULE_ACTION` review item (real moves = Phase 10)
+- `has_lossless_duplicate` stubbed `False` until Phase 9
+- GUI Rules Editor is Phase 14
+
+### Acceptance Criteria
+- [x] Default rules seed idempotently per library
+- [x] Low-bitrate and VA rules match and apply safe actions
+- [x] Rule CRUD validates conditions/actions
+- [x] Pipeline: identify → evaluate_rules via dispatcher
+- [ ] CI green on GitHub Actions
+- [x] Git commit: `feat: Phase 8 RulesEngine + RuleWorker`
 
 ---
 

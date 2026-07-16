@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 8 rules engine** — user-configurable automation after identify:
+  - `RulesEngine` — context build, evaluate/batch, apply matches, default
+    seeding, CRUD (create/update/delete/list/enable)
+  - `RuleWorker` + dispatcher `evaluate_rules` route (shared metadata I/O pool)
+  - `MetadataWorker` enqueues `evaluate_rules` after every identify
+  - Shipped defaults: Archive MP3 (Phase 9/10 dependent), Detect VA,
+    Flag low bitrate (< 192 kbps → `low_quality` review)
+  - Safe actions: `flag_review`, `set_artist`, `set_genre`; `move_to_zone`
+    parks a review item until Phase 10
+  - `RulesMatchedEvent`; `RuleError`; repo helpers `list_by_library` /
+    `find_by_name` / `delete`
+  - 355 tests total (up from 346)
+
+### Added
+
 - **Phase 7 review queue** — human approval gate for uncertain metadata:
   - `ReviewQueueService` — create, get_pending, get_by_type, approve,
     reject, defer, approve_with_edits; idempotent pending upsert per

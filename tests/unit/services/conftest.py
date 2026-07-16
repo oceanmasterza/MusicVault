@@ -20,6 +20,7 @@ from musicvault.core.event_bus import EventBus
 from musicvault.db.repositories.file_identity_repo import FileIdentityRepository
 from musicvault.db.repositories.job_repo import JobRepository
 from musicvault.db.repositories.review_repo import ReviewRepository
+from musicvault.db.repositories.rule_repo import RuleRepository
 from musicvault.db.repositories.track_repo import TrackRepository
 from musicvault.db.tables import libraries, metadata, tracks
 from musicvault.db.uuid_utils import generate_uuid7, uuid_to_blob
@@ -86,6 +87,11 @@ def track_repo(engine: Engine) -> TrackRepository:
 @pytest.fixture
 def review_repo(engine: Engine) -> ReviewRepository:
     return ReviewRepository(engine)
+
+
+@pytest.fixture
+def rule_repo(engine: Engine) -> RuleRepository:
+    return RuleRepository(engine)
 
 
 @pytest.fixture

@@ -13,9 +13,12 @@ from uuid import UUID
 import pytest
 from sqlalchemy import Engine
 
+from musicvault.core.event_bus import EventBus
+from musicvault.db.repositories.artist_repo import ArtistRepository
 from musicvault.db.repositories.file_identity_repo import FileIdentityRepository
 from musicvault.db.repositories.job_repo import JobRepository
 from musicvault.db.repositories.metadata_confidence_repo import MetadataConfidenceRepository
+from musicvault.db.repositories.rule_repo import RuleRepository
 from musicvault.db.repositories.track_repo import TrackRepository
 from musicvault.db.writer import DatabaseWriter
 from musicvault.models.entities.job import JobStatus, JobType
@@ -24,9 +27,11 @@ from musicvault.services.job_dispatcher import JobDispatcher
 from musicvault.services.job_queue_service import JobQueueService
 from musicvault.services.metadata_arbitrator import MetadataArbitrator
 from musicvault.services.review_queue_service import ReviewQueueService
+from musicvault.services.rules_engine import RulesEngine
 from musicvault.workers.cpu.fingerprint_worker import FingerprintWorker
 from musicvault.workers.cpu.hash_worker import HashWorker
 from musicvault.workers.io.metadata_worker import MetadataWorker
+from musicvault.workers.io.rule_worker import RuleWorker
 from musicvault.workers.io.scanner_worker import ScannerWorker
 
 _NOW = datetime(2026, 7, 15, tzinfo=UTC)
@@ -63,6 +68,7 @@ def dispatcher(
     file_identity_repo: FileIdentityRepository,
     database_writer: DatabaseWriter,
     review_queue: ReviewQueueService,
+    rule_repo: RuleRepository,
     engine: Engine,
 ) -> Iterator[JobDispatcher]:
     scanner = ScannerWorker(track_repo, file_identity_repo, database_writer, job_queue)
@@ -77,12 +83,21 @@ def dispatcher(
         job_queue,
         review_queue,
     )
+    rules_engine = RulesEngine(
+        rule_repo,
+        track_repo,
+        ArtistRepository(engine),
+        review_queue,
+        EventBus(),
+    )
+    rule_worker = RuleWorker(track_repo, rules_engine, job_queue)
     disp = JobDispatcher(
         job_queue,
         scanner,
         hasher,
         fingerprinter,
         metadata,
+        rule_worker,
         scanner_threads=1,
         hash_processes=1,
         metadata_threads=1,

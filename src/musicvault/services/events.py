@@ -21,3 +21,12 @@ class ReviewItemAddedEvent(DomainEvent):
     library_id: UUID
     review_type: ReviewType
     track_id: UUID | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class RulesMatchedEvent(DomainEvent):
+    """One or more automation rules matched a track during evaluation."""
+
+    library_id: UUID
+    track_id: UUID
+    rule_ids: tuple[UUID, ...]

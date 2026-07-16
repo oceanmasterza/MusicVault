@@ -6,20 +6,10 @@ Phase 4 wired `scan_directory` (I/O — `ThreadPoolExecutor`) and
 `fingerprint_file` on the same CPU process pool. Phase 6 adds
 `identify_metadata` on a dedicated I/O thread pool (HTTP + Mutagen —
 docs/architecture/08-performance.md, "Three-Tier Worker Model").
-Later phases add one route per new worker as it's built rather than
-pre-registering pools for workers that don't exist yet.
-
-Crash recovery (docs/architecture/10-revision-v2.md, "Resume After
-Crash") is split into two steps by design:
-
-1. :meth:`recover` — reset-orphaned-jobs. Callers must run this once,
-   before :meth:`start`, on every application startup — a `running`
-   job found then can only mean the previous process crashed or was
-   killed mid-execution.
-2. `promote_due_retries`, called every poll cycle inside :meth:`run_cycle`
-   — moves jobs whose backoff has elapsed back to `pending` so
-   :meth:`~musicvault.services.job_queue_service.JobQueueService.claim_pending`
-   picks them up.
+Phase 8 adds `evaluate_rules` on that same I/O metadata pool (DB +
+light AST evaluation). Later phases add one route per new worker as
+it's built rather than pre-registering pools for workers that don't
+exist yet.
 """
 
 from __future__ import annotations
@@ -35,6 +25,7 @@ from musicvault.services.job_queue_service import JobQueueService
 from musicvault.workers.cpu.fingerprint_worker import FingerprintWorker, compute_fingerprint
 from musicvault.workers.cpu.hash_worker import HashWorker, compute_hash
 from musicvault.workers.io.metadata_worker import MetadataWorker
+from musicvault.workers.io.rule_worker import RuleWorker
 from musicvault.workers.io.scanner_worker import ScannerWorker
 
 
@@ -46,6 +37,7 @@ class JobDispatcher:
         hash_worker: HashWorker,
         fingerprint_worker: FingerprintWorker,
         metadata_worker: MetadataWorker,
+        rule_worker: RuleWorker,
         *,
         scanner_threads: int = 1,
         hash_processes: int | None = None,
@@ -58,6 +50,7 @@ class JobDispatcher:
         self._hash_worker = hash_worker
         self._fingerprint_worker = fingerprint_worker
         self._metadata_worker = metadata_worker
+        self._rule_worker = rule_worker
         self._claim_batch_size = claim_batch_size
         self._poll_interval_seconds = poll_interval_seconds
         self._scan_pool = ThreadPoolExecutor(
@@ -66,9 +59,9 @@ class JobDispatcher:
         # Shared CPU ProcessPool for hash_file and fingerprint_file —
         # both are Tier 1 CPU-bound work (08-performance.md).
         self._cpu_pool = ProcessPoolExecutor(max_workers=hash_processes)
-        # Dedicated I/O ThreadPool for identify_metadata (Tier 2 —
-        # HTTP + Mutagen). Kept separate from scan so a slow AcoustID
-        # / MusicBrainz call cannot starve directory walks.
+        # Dedicated I/O ThreadPool for identify_metadata + evaluate_rules
+        # (Tier 2). Kept separate from scan so slow HTTP cannot starve
+        # directory walks.
         self._metadata_pool = ThreadPoolExecutor(
             max_workers=metadata_threads, thread_name_prefix="musicvault-meta"
         )
@@ -106,6 +99,9 @@ class JobDispatcher:
         metadata_jobs = list(
             self._job_queue.claim_pending(JobType.IDENTIFY_METADATA, self._claim_batch_size)
         )
+        rule_jobs = list(
+            self._job_queue.claim_pending(JobType.EVALUATE_RULES, self._claim_batch_size)
+        )
 
         futures: list[Future[Any]] = []
         for job in scan_jobs:
@@ -123,6 +119,8 @@ class JobDispatcher:
             futures.append(future)
         for job in metadata_jobs:
             futures.append(self._metadata_pool.submit(self._run_metadata, job))
+        for job in rule_jobs:
+            futures.append(self._metadata_pool.submit(self._run_rules, job))
         return futures
 
     def start(self) -> None:
@@ -166,6 +164,14 @@ class JobDispatcher:
             self._metadata_worker.execute(job)
         except Exception as exc:
             logger.exception("MetadataWorker crashed on job {}", job.id)
+            self._job_queue.mark_failed(job.id, str(exc))
+
+    def _run_rules(self, job: Job) -> None:
+        """Runs on a `_metadata_pool` thread (DB + rule AST evaluation)."""
+        try:
+            self._rule_worker.execute(job)
+        except Exception as exc:
+            logger.exception("RuleWorker crashed on job {}", job.id)
             self._job_queue.mark_failed(job.id, str(exc))
 
     def _make_hash_callback(self, job: Job) -> Any:

@@ -81,3 +81,17 @@ def test_update_persists_changes(engine: Engine, library_id: UUID) -> None:
     assert loaded is not None
     assert loaded.enabled is False
     assert loaded.name == "renamed"
+
+
+def test_list_by_library_find_by_name_and_delete(engine: Engine, library_id: UUID) -> None:
+    repo = RuleRepository(engine)
+    rule = _make_rule(library_id, name="Keep me")
+    repo.create(rule)
+    other = _make_rule(library_id, name="Other")
+    repo.create(other)
+
+    assert {r.name for r in repo.list_by_library(library_id)} == {"Keep me", "Other"}
+    assert repo.find_by_name(library_id, "Keep me") is not None
+    repo.delete(rule.id)
+    assert repo.get(rule.id) is None
+    assert repo.find_by_name(library_id, "Keep me") is None

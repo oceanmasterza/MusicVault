@@ -51,6 +51,10 @@ class ReviewError(MusicVaultError):
     """Raised when a review-queue operation is invalid or cannot complete."""
 
 
+class RuleError(MusicVaultError):
+    """Raised when a rules-engine operation is invalid or cannot complete."""
+
+
 class OperationError(MusicVaultError):
     """Raised when a mutating library operation fails."""
 

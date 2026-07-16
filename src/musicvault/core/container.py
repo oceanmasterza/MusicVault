@@ -41,9 +41,11 @@ from musicvault.services.job_dispatcher import JobDispatcher
 from musicvault.services.job_queue_service import JobQueueService
 from musicvault.services.metadata_arbitrator import MetadataArbitrator
 from musicvault.services.review_queue_service import ReviewQueueService
+from musicvault.services.rules_engine import RulesEngine
 from musicvault.workers.cpu.fingerprint_worker import FingerprintWorker
 from musicvault.workers.cpu.hash_worker import HashWorker
 from musicvault.workers.io.metadata_worker import MetadataWorker
+from musicvault.workers.io.rule_worker import RuleWorker
 from musicvault.workers.io.scanner_worker import ScannerWorker
 
 
@@ -65,12 +67,14 @@ class Container:
     database_writer: DatabaseWriter
     job_queue: JobQueueService
     review_queue: ReviewQueueService
+    rules_engine: RulesEngine
     plugin_manager: PluginManager
     metadata_arbitrator: MetadataArbitrator
     scanner_worker: ScannerWorker
     hash_worker: HashWorker
     fingerprint_worker: FingerprintWorker
     metadata_worker: MetadataWorker
+    rule_worker: RuleWorker
     dispatcher: JobDispatcher
     event_bus: EventBus = field(default_factory=EventBus)
 
@@ -101,6 +105,8 @@ class Container:
         job_repo = JobRepository(engine)
         track_repo = TrackRepository(engine)
         review_repo = ReviewRepository(engine)
+        rule_repo = RuleRepository(engine)
+        artist_repo = ArtistRepository(engine)
         file_identity_repo = FileIdentityRepository(engine)
         metadata_confidence_repo = MetadataConfidenceRepository(engine)
         event_bus = EventBus()
@@ -117,6 +123,7 @@ class Container:
             event_bus,
             confidence_threshold=config.metadata.confidence_threshold,
         )
+        rules_engine = RulesEngine(rule_repo, track_repo, artist_repo, review_queue, event_bus)
 
         plugin_manager = PluginManager(_build_metadata_providers(config.metadata))
         metadata_arbitrator = MetadataArbitrator(
@@ -135,12 +142,14 @@ class Container:
             job_queue,
             review_queue,
         )
+        rule_worker = RuleWorker(track_repo, rules_engine, job_queue)
         dispatcher = JobDispatcher(
             job_queue,
             scanner_worker,
             hash_worker,
             fingerprint_worker,
             metadata_worker,
+            rule_worker,
             scanner_threads=config.pipeline.scanner_worker_threads,
             hash_processes=config.pipeline.hash_worker_processes,
             metadata_threads=config.pipeline.metadata_worker_threads,
@@ -157,21 +166,23 @@ class Container:
             engine=engine,
             job_repo=job_repo,
             review_repo=review_repo,
-            rule_repo=RuleRepository(engine),
+            rule_repo=rule_repo,
             file_identity_repo=file_identity_repo,
             track_repo=track_repo,
             album_repo=AlbumRepository(engine),
-            artist_repo=ArtistRepository(engine),
+            artist_repo=artist_repo,
             metadata_confidence_repo=metadata_confidence_repo,
             database_writer=database_writer,
             job_queue=job_queue,
             review_queue=review_queue,
+            rules_engine=rules_engine,
             plugin_manager=plugin_manager,
             metadata_arbitrator=metadata_arbitrator,
             scanner_worker=scanner_worker,
             hash_worker=hash_worker,
             fingerprint_worker=fingerprint_worker,
             metadata_worker=metadata_worker,
+            rule_worker=rule_worker,
             dispatcher=dispatcher,
             event_bus=event_bus,
         )

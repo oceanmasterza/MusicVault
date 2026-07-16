@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Engine, Row, insert, select, update
+from sqlalchemy import Engine, Row, delete, insert, select, update
 
 from musicvault.db.tables import rules as rules_table
 from musicvault.db.uuid_utils import blob_to_uuid, uuid_to_blob
@@ -43,6 +43,27 @@ class RuleRepository:
             rows = conn.execute(statement).all()
         return [_from_row(row) for row in rows]
 
+    def list_by_library(self, library_id: UUID) -> list[Rule]:
+        """All rules for a library (enabled and disabled), priority ascending."""
+        statement = (
+            select(rules_table)
+            .where(rules_table.c.library_id == uuid_to_blob(library_id))
+            .order_by(rules_table.c.priority.asc())
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(statement).all()
+        return [_from_row(row) for row in rows]
+
+    def find_by_name(self, library_id: UUID, name: str) -> Rule | None:
+        statement = (
+            select(rules_table)
+            .where(rules_table.c.library_id == uuid_to_blob(library_id))
+            .where(rules_table.c.name == name)
+        )
+        with self._engine.connect() as conn:
+            row = conn.execute(statement).first()
+        return _from_row(row) if row is not None else None
+
     def update(self, rule: Rule) -> None:
         with self._engine.begin() as conn:
             conn.execute(
@@ -50,6 +71,10 @@ class RuleRepository:
                 .where(rules_table.c.id == uuid_to_blob(rule.id))
                 .values(**_to_row(rule))
             )
+
+    def delete(self, rule_id: UUID) -> None:
+        with self._engine.begin() as conn:
+            conn.execute(delete(rules_table).where(rules_table.c.id == uuid_to_blob(rule_id)))
 
 
 def _to_row(rule: Rule) -> dict[str, object]:
