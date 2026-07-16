@@ -530,7 +530,7 @@ Phase 16  ░░░░░░░░░░ Packaging + installer
 - [x] Low-bitrate and VA rules match and apply safe actions
 - [x] Rule CRUD validates conditions/actions
 - [x] Pipeline: identify → evaluate_rules via dispatcher
-- [ ] CI green on GitHub Actions
+- [x] CI green on GitHub Actions
 - [x] Git commit: `feat: Phase 8 RulesEngine + RuleWorker`
 
 ---
