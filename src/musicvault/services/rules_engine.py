@@ -3,8 +3,9 @@
 Wraps the Phase 3 condition AST
 (:func:`~musicvault.models.value_objects.rule_condition.parse_conditions`)
 with repository loading, default seeding, CRUD, and action application.
-``has_lossless_duplicate`` stays ``False`` until Phase 9; ``move_to_zone``
-creates a review item rather than moving files (Phase 10).
+``has_lossless_duplicate`` is computed from Phase 9 duplicate groups by
+the caller (`RuleWorker`); ``move_to_zone`` creates a review item rather
+than moving files (Phase 10).
 """
 
 from __future__ import annotations

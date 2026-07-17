@@ -6,10 +6,10 @@ Phase 4 wired `scan_directory` (I/O — `ThreadPoolExecutor`) and
 `fingerprint_file` on the same CPU process pool. Phase 6 adds
 `identify_metadata` on a dedicated I/O thread pool (HTTP + Mutagen —
 docs/architecture/08-performance.md, "Three-Tier Worker Model").
-Phase 8 adds `evaluate_rules` on that same I/O metadata pool (DB +
-light AST evaluation). Later phases add one route per new worker as
-it's built rather than pre-registering pools for workers that don't
-exist yet.
+Phase 8 adds `evaluate_rules` and Phase 9 `detect_duplicates` on that
+same I/O metadata pool (DB reads + light in-memory work). Later phases
+add one route per new worker as it's built rather than pre-registering
+pools for workers that don't exist yet.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from musicvault.models.entities.job import Job, JobType
 from musicvault.services.job_queue_service import JobQueueService
 from musicvault.workers.cpu.fingerprint_worker import FingerprintWorker, compute_fingerprint
 from musicvault.workers.cpu.hash_worker import HashWorker, compute_hash
+from musicvault.workers.io.duplicate_worker import DuplicateWorker
 from musicvault.workers.io.metadata_worker import MetadataWorker
 from musicvault.workers.io.rule_worker import RuleWorker
 from musicvault.workers.io.scanner_worker import ScannerWorker
@@ -38,6 +39,7 @@ class JobDispatcher:
         fingerprint_worker: FingerprintWorker,
         metadata_worker: MetadataWorker,
         rule_worker: RuleWorker,
+        duplicate_worker: DuplicateWorker,
         *,
         scanner_threads: int = 1,
         hash_processes: int | None = None,
@@ -51,6 +53,7 @@ class JobDispatcher:
         self._fingerprint_worker = fingerprint_worker
         self._metadata_worker = metadata_worker
         self._rule_worker = rule_worker
+        self._duplicate_worker = duplicate_worker
         self._claim_batch_size = claim_batch_size
         self._poll_interval_seconds = poll_interval_seconds
         self._scan_pool = ThreadPoolExecutor(
@@ -102,6 +105,9 @@ class JobDispatcher:
         rule_jobs = list(
             self._job_queue.claim_pending(JobType.EVALUATE_RULES, self._claim_batch_size)
         )
+        duplicate_jobs = list(
+            self._job_queue.claim_pending(JobType.DETECT_DUPLICATES, self._claim_batch_size)
+        )
 
         futures: list[Future[Any]] = []
         for job in scan_jobs:
@@ -121,6 +127,8 @@ class JobDispatcher:
             futures.append(self._metadata_pool.submit(self._run_metadata, job))
         for job in rule_jobs:
             futures.append(self._metadata_pool.submit(self._run_rules, job))
+        for job in duplicate_jobs:
+            futures.append(self._metadata_pool.submit(self._run_duplicates, job))
         return futures
 
     def start(self) -> None:
@@ -172,6 +180,14 @@ class JobDispatcher:
             self._rule_worker.execute(job)
         except Exception as exc:
             logger.exception("RuleWorker crashed on job {}", job.id)
+            self._job_queue.mark_failed(job.id, str(exc))
+
+    def _run_duplicates(self, job: Job) -> None:
+        """Runs on a `_metadata_pool` thread (DB reads + in-memory grouping)."""
+        try:
+            self._duplicate_worker.execute(job)
+        except Exception as exc:
+            logger.exception("DuplicateWorker crashed on job {}", job.id)
             self._job_queue.mark_failed(job.id, str(exc))
 
     def _make_hash_callback(self, job: Job) -> Any:

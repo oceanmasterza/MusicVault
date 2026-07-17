@@ -15,6 +15,7 @@ from sqlalchemy import Engine
 
 from musicvault.core.event_bus import EventBus
 from musicvault.db.repositories.artist_repo import ArtistRepository
+from musicvault.db.repositories.duplicate_repo import DuplicateRepository
 from musicvault.db.repositories.file_identity_repo import FileIdentityRepository
 from musicvault.db.repositories.job_repo import JobRepository
 from musicvault.db.repositories.metadata_confidence_repo import MetadataConfidenceRepository
@@ -22,6 +23,8 @@ from musicvault.db.repositories.rule_repo import RuleRepository
 from musicvault.db.repositories.track_repo import TrackRepository
 from musicvault.db.writer import DatabaseWriter
 from musicvault.models.entities.job import JobStatus, JobType
+from musicvault.models.services.duplicate_matcher import DuplicateMatcher
+from musicvault.models.services.quality_scorer import DEFAULT_WEIGHTS, QualityScorer
 from musicvault.plugins.builtin.filename_parser import FilenameParserProvider
 from musicvault.services.job_dispatcher import JobDispatcher
 from musicvault.services.job_queue_service import JobQueueService
@@ -30,6 +33,7 @@ from musicvault.services.review_queue_service import ReviewQueueService
 from musicvault.services.rules_engine import RulesEngine
 from musicvault.workers.cpu.fingerprint_worker import FingerprintWorker
 from musicvault.workers.cpu.hash_worker import HashWorker
+from musicvault.workers.io.duplicate_worker import DuplicateWorker
 from musicvault.workers.io.metadata_worker import MetadataWorker
 from musicvault.workers.io.rule_worker import RuleWorker
 from musicvault.workers.io.scanner_worker import ScannerWorker
@@ -90,7 +94,16 @@ def dispatcher(
         review_queue,
         EventBus(),
     )
-    rule_worker = RuleWorker(track_repo, rules_engine, job_queue)
+    duplicate_repo = DuplicateRepository(engine)
+    rule_worker = RuleWorker(track_repo, rules_engine, duplicate_repo, job_queue)
+    duplicate_worker = DuplicateWorker(
+        track_repo,
+        file_identity_repo,
+        duplicate_repo,
+        DuplicateMatcher(QualityScorer(DEFAULT_WEIGHTS)),
+        review_queue,
+        job_queue,
+    )
     disp = JobDispatcher(
         job_queue,
         scanner,
@@ -98,6 +111,7 @@ def dispatcher(
         fingerprinter,
         metadata,
         rule_worker,
+        duplicate_worker,
         scanner_threads=1,
         hash_processes=1,
         metadata_threads=1,

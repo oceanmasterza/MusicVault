@@ -12,6 +12,7 @@ from musicvault.core.event_bus import EventBus
 from musicvault.core.paths import AppPaths
 from musicvault.db.repositories.album_repo import AlbumRepository
 from musicvault.db.repositories.artist_repo import ArtistRepository
+from musicvault.db.repositories.duplicate_repo import DuplicateRepository
 from musicvault.db.repositories.file_identity_repo import FileIdentityRepository
 from musicvault.db.repositories.job_repo import JobRepository
 from musicvault.db.repositories.metadata_confidence_repo import MetadataConfidenceRepository
@@ -22,6 +23,7 @@ from musicvault.db.tables import libraries
 from musicvault.db.uuid_utils import generate_uuid7, uuid_to_blob
 from musicvault.db.writer import DatabaseWriter
 from musicvault.models.entities.job import Job, JobStatus, JobType
+from musicvault.models.services.duplicate_matcher import DuplicateMatcher
 from musicvault.plugins.manager import PluginManager
 from musicvault.services.job_dispatcher import JobDispatcher
 from musicvault.services.job_queue_service import JobQueueService
@@ -30,6 +32,7 @@ from musicvault.services.review_queue_service import ReviewQueueService
 from musicvault.services.rules_engine import RulesEngine
 from musicvault.workers.cpu.fingerprint_worker import FingerprintWorker
 from musicvault.workers.cpu.hash_worker import HashWorker
+from musicvault.workers.io.duplicate_worker import DuplicateWorker
 from musicvault.workers.io.metadata_worker import MetadataWorker
 from musicvault.workers.io.rule_worker import RuleWorker
 from musicvault.workers.io.scanner_worker import ScannerWorker
@@ -137,6 +140,17 @@ def test_bootstrap_wires_the_phase_6_metadata_stack(
     assert isinstance(container.rule_worker, RuleWorker)
     provider_ids = {p.provider_id for p in container.plugin_manager.get_metadata_providers()}
     assert provider_ids == {"acoustid", "musicbrainz", "local_tags", "filename_parser"}
+    container.close()
+
+
+def test_bootstrap_wires_the_phase_9_duplicate_stack(
+    app_paths: AppPaths, app_config: AppConfig
+) -> None:
+    container = Container.bootstrap(paths=app_paths, config=app_config)
+
+    assert isinstance(container.duplicate_repo, DuplicateRepository)
+    assert isinstance(container.duplicate_matcher, DuplicateMatcher)
+    assert isinstance(container.duplicate_worker, DuplicateWorker)
     container.close()
 
 

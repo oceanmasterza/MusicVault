@@ -2,9 +2,10 @@
 
 I/O-bound (Tier 2 — HTTP + Mutagen). When overall confidence is below
 threshold, sets ``tracks.needs_review`` and creates a review item via
-ReviewQueueService. Always enqueues ``evaluate_rules`` for
-:class:`~musicvault.workers.io.rule_worker.RuleWorker`. Artwork and
-duplicate jobs remain later phases.
+ReviewQueueService. Always enqueues ``detect_duplicates`` (Phase 9),
+which chains to ``evaluate_rules`` once grouping is done — so rules see
+the real ``has_lossless_duplicate`` flag. Artwork jobs remain a later
+phase.
 """
 
 from __future__ import annotations
@@ -82,7 +83,7 @@ class MetadataWorker:
             )
 
         self._job_queue.enqueue(
-            JobType.EVALUATE_RULES,
+            JobType.DETECT_DUPLICATES,
             job.library_id,
             {"track_id": str(track_id)},
             parent_job_id=job.id,

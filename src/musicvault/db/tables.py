@@ -167,6 +167,8 @@ file_identity = Table(
     Column("hash_computed_at", Text),
     Column("fingerprint_computed_at", Text),
     Index("idx_file_identity_acoustid", "acoustid_id"),
+    Index("idx_file_identity_content_hash", "content_hash_sha256"),
+    Index("idx_file_identity_fingerprint_hash", "fingerprint_hash"),
 )
 
 # ---------------------------------------------------------------------------
@@ -272,6 +274,7 @@ duplicate_groups = Table(
     Column("detected_at", Text, nullable=False),
     Column("status", Text, nullable=False, server_default=text("'open'")),
     Column("resolution", Text),
+    Index("idx_duplicate_groups_library_status", "library_id", "status"),
 )
 
 duplicate_members = Table(
@@ -282,6 +285,7 @@ duplicate_members = Table(
     Column("quality_score", Integer, nullable=False),
     Column("is_best", Boolean, nullable=False, server_default=false()),
     Column("zone", Text, nullable=False),
+    Index("idx_duplicate_members_track", "track_id"),
 )
 
 # ---------------------------------------------------------------------------

@@ -97,6 +97,7 @@ class ReviewQueueService:
                 created_at=created_at,
                 track_id=item.track_id,
                 album_id=item.album_id,
+                duplicate_group_id=item.duplicate_group_id,
                 description=item.description,
                 confidence=item.confidence,
                 payload=item.payload,

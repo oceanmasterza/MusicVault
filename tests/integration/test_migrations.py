@@ -74,7 +74,7 @@ def test_run_migrations_records_alembic_version(tmp_path: Path) -> None:
     finally:
         engine.dispose()
 
-    assert version == "0001"
+    assert version == "0002"
 
 
 def test_downgrade_to_base_drops_all_specified_tables(tmp_path: Path) -> None:

@@ -24,8 +24,8 @@ Phase 5   ██████████ Fingerprint worker + persistence
 Phase 6   ██████████ Metadata arbitrator + providers
 Phase 7   ██████████ Review queue + confidence scoring
 Phase 8   ██████████ Rules engine
-Phase 9   ░░░░░░░░░░ Duplicate worker + quality scoring (CURRENT)
-Phase 10  ░░░░░░░░░░ Organizer + staging zones + watch folder
+Phase 9   ██████████ Duplicate worker + quality scoring
+Phase 10  ░░░░░░░░░░ Organizer + staging zones + watch folder (CURRENT)
 Phase 11  ░░░░░░░░░░ Artwork worker
 Phase 12  ░░░░░░░░░░ Rollback engine
 Phase 13  ░░░░░░░░░░ Reports
@@ -543,6 +543,38 @@ Phase 16  ░░░░░░░░░░ Packaging + installer
 - `DuplicateWorker`
 - Duplicate group storage
 - Quality-based best-track selection
+
+### Implementation notes (service layer)
+- `DuplicateMatcher` (`models/services/`, pure) — builds a
+  `DuplicateGroup` + quality-ranked members from matched tracks via
+  `QualityScorer` (its first production consumer)
+- Exact-key matching tiers with fixed confidences: content hash (1.0) >
+  Chromaprint `fingerprint_hash` (0.95) > `mb_recording_id` (0.90);
+  `fuzzy` stays vocabulary-only (no documented thresholds)
+- `DuplicateRepository` — group/member persistence, candidate-discovery
+  SQL, `has_lossless_duplicate`, status/resolution updates; migration
+  0002 adds the supporting indexes
+- `DuplicateWorker` + dispatcher route for `detect_duplicates` (shared
+  I/O pool); persists `tracks.quality_score` for every grouped track,
+  creates a `possible_duplicate` review item linked via
+  `duplicate_group_id`, idempotent on re-detection (reuses the open group)
+- Pipeline reordered per 10-revision-v2: identify → **detect_duplicates**
+  → evaluate_rules, so `RuleWorker` computes the real
+  `has_lossless_duplicate` and the Phase 8 archive-MP3 rule now matches
+  (its `move_to_zone` still parks a review item until Phase 10)
+- Group resolution actions (`kept_best` / `archived`) and any file moves
+  are Phase 10; Duplicate Viewer GUI is Phase 14
+
+### Acceptance Criteria
+- [x] Tracks sharing a hash/fingerprint/MBID form one open group with the
+      best copy selected by quality score
+- [x] Duplicate detection creates a `possible_duplicate` review item
+      linked to the group
+- [x] Re-detection reuses the open group (no duplicate groups/items)
+- [x] Archive-MP3 default rule fires when a lossless duplicate exists
+- [x] Pipeline: identify → detect_duplicates → evaluate_rules
+- [x] CI green on GitHub Actions
+- [x] Git commit: `feat: Phase 9 DuplicateMatcher + DuplicateWorker`
 
 ---
 

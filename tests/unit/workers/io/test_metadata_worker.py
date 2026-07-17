@@ -135,13 +135,13 @@ def test_execute_persists_arbitrated_fields_and_completes_job(
     assert {c.field for c in conf} == {"title", "year", "genre"}
     assert job_repo.get(job_id).status is JobStatus.COMPLETED  # type: ignore[union-attr]
     assert review_queue.get_pending(library_id) == []
-    rule_jobs = [
+    duplicate_jobs = [
         job
         for job in job_repo.list_by_status(JobStatus.PENDING)
-        if job.job_type is JobType.EVALUATE_RULES
+        if job.job_type is JobType.DETECT_DUPLICATES
     ]
-    assert len(rule_jobs) == 1
-    assert rule_jobs[0].payload["track_id"] == str(track_id)
+    assert len(duplicate_jobs) == 1
+    assert duplicate_jobs[0].payload["track_id"] == str(track_id)
 
 
 def test_execute_marks_failed_when_track_missing(

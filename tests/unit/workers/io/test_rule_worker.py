@@ -9,11 +9,17 @@ from sqlalchemy import Engine
 
 from musicvault.core.event_bus import EventBus
 from musicvault.db.repositories.artist_repo import ArtistRepository
+from musicvault.db.repositories.duplicate_repo import DuplicateRepository
 from musicvault.db.repositories.job_repo import JobRepository
 from musicvault.db.repositories.review_repo import ReviewRepository
 from musicvault.db.repositories.rule_repo import RuleRepository
 from musicvault.db.repositories.track_repo import TrackRepository
 from musicvault.db.uuid_utils import generate_uuid7
+from musicvault.models.entities.duplicate_group import (
+    DuplicateGroup,
+    DuplicateMember,
+    MatchType,
+)
 from musicvault.models.entities.job import Job, JobStatus, JobType
 from musicvault.models.entities.review_item import ReviewStatus, ReviewType
 from musicvault.models.entities.track import LibraryZone, Track
@@ -67,7 +73,7 @@ def test_execute_seeds_defaults_and_flags_low_bitrate(
     )
     job_repo.update_status(job_id, JobStatus.RUNNING)
 
-    RuleWorker(track_repo, rules, job_queue).execute(
+    RuleWorker(track_repo, rules, DuplicateRepository(engine), job_queue).execute(
         Job(
             id=job_id,
             library_id=library_id,
@@ -82,6 +88,87 @@ def test_execute_seeds_defaults_and_flags_low_bitrate(
     assert len(rule_repo.list_by_library(library_id)) == 3
     pending = review_repo.list_by_status(ReviewStatus.PENDING, library_id=library_id)
     assert any(item.review_type is ReviewType.LOW_QUALITY for item in pending)
+
+
+def test_execute_archive_mp3_rule_matches_when_lossless_duplicate_exists(
+    track_repo: TrackRepository,
+    job_queue: JobQueueService,
+    job_repo: JobRepository,
+    review_repo: ReviewRepository,
+    rule_repo: RuleRepository,
+    duplicate_repo: DuplicateRepository,
+    engine: Engine,
+    library_id: UUID,
+    track_id: UUID,
+) -> None:
+    """Phase 9 un-stubs `has_lossless_duplicate`: an MP3 sharing an open
+    duplicate group with a FLAC now triggers the archive-MP3 default rule,
+    which parks a rule_action review item (real zone moves = Phase 10)."""
+    flac_id = generate_uuid7()
+    track_repo.upsert(_make_track(library_id, track_id, codec="mp3", bitrate=320))
+    track_repo.upsert(
+        _make_track(
+            library_id,
+            flac_id,
+            codec="flac",
+            bitrate=None,
+            is_lossless=True,
+            file_path="C:/library/high.flac",
+            file_name="high.flac",
+        )
+    )
+    group_id = generate_uuid7()
+    duplicate_repo.save_group(
+        DuplicateGroup(
+            id=group_id,
+            library_id=library_id,
+            match_type=MatchType.FINGERPRINT,
+            match_confidence=0.95,
+            best_track_id=flac_id,
+            track_count=2,
+            detected_at=_NOW,
+        ),
+        [
+            DuplicateMember(
+                group_id=group_id,
+                track_id=flac_id,
+                quality_score=95,
+                zone="library",
+                is_best=True,
+            ),
+            DuplicateMember(
+                group_id=group_id, track_id=track_id, quality_score=70, zone="incoming"
+            ),
+        ],
+    )
+    event_bus = EventBus()
+    rules = RulesEngine(
+        rule_repo,
+        track_repo,
+        ArtistRepository(engine),
+        ReviewQueueService(review_repo, track_repo, event_bus),
+        event_bus,
+    )
+    job_id = job_queue.enqueue(
+        JobType.EVALUATE_RULES, library_id, {"track_id": str(track_id)}, now=_NOW
+    )
+    job_repo.update_status(job_id, JobStatus.RUNNING)
+
+    RuleWorker(track_repo, rules, duplicate_repo, job_queue).execute(
+        Job(
+            id=job_id,
+            library_id=library_id,
+            job_type=JobType.EVALUATE_RULES,
+            status=JobStatus.RUNNING,
+            payload={"track_id": str(track_id)},
+            created_at=_NOW,
+        )
+    )
+
+    assert job_repo.get(job_id).status is JobStatus.COMPLETED  # type: ignore[union-attr]
+    pending = review_repo.list_by_status(ReviewStatus.PENDING, library_id=library_id)
+    rule_items = [item for item in pending if item.review_type is ReviewType.RULE_ACTION]
+    assert any("Archive MP3" in item.title for item in rule_items)
 
 
 def test_execute_marks_failed_when_track_missing(
@@ -107,7 +194,7 @@ def test_execute_marks_failed_when_track_missing(
     )
     job_repo.update_status(job_id, JobStatus.RUNNING)
 
-    RuleWorker(track_repo, rules, job_queue).execute(
+    RuleWorker(track_repo, rules, DuplicateRepository(engine), job_queue).execute(
         Job(
             id=job_id,
             library_id=library_id,

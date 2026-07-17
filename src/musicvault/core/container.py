@@ -24,6 +24,7 @@ from musicvault.db.engine import create_sqlite_engine
 from musicvault.db.migrations.runner import run_migrations
 from musicvault.db.repositories.album_repo import AlbumRepository
 from musicvault.db.repositories.artist_repo import ArtistRepository
+from musicvault.db.repositories.duplicate_repo import DuplicateRepository
 from musicvault.db.repositories.file_identity_repo import FileIdentityRepository
 from musicvault.db.repositories.job_repo import JobRepository
 from musicvault.db.repositories.metadata_confidence_repo import MetadataConfidenceRepository
@@ -32,6 +33,8 @@ from musicvault.db.repositories.rule_repo import RuleRepository
 from musicvault.db.repositories.track_repo import TrackRepository
 from musicvault.db.writer import DatabaseWriter
 from musicvault.models.interfaces.metadata import MetadataProvider
+from musicvault.models.services.duplicate_matcher import DuplicateMatcher
+from musicvault.models.services.quality_scorer import DEFAULT_WEIGHTS, QualityScorer
 from musicvault.plugins.builtin.acoustid import AcoustIdProvider
 from musicvault.plugins.builtin.filename_parser import FilenameParserProvider
 from musicvault.plugins.builtin.local_tags import LocalTagsProvider
@@ -44,6 +47,7 @@ from musicvault.services.review_queue_service import ReviewQueueService
 from musicvault.services.rules_engine import RulesEngine
 from musicvault.workers.cpu.fingerprint_worker import FingerprintWorker
 from musicvault.workers.cpu.hash_worker import HashWorker
+from musicvault.workers.io.duplicate_worker import DuplicateWorker
 from musicvault.workers.io.metadata_worker import MetadataWorker
 from musicvault.workers.io.rule_worker import RuleWorker
 from musicvault.workers.io.scanner_worker import ScannerWorker
@@ -59,6 +63,7 @@ class Container:
     job_repo: JobRepository
     review_repo: ReviewRepository
     rule_repo: RuleRepository
+    duplicate_repo: DuplicateRepository
     file_identity_repo: FileIdentityRepository
     track_repo: TrackRepository
     album_repo: AlbumRepository
@@ -68,6 +73,7 @@ class Container:
     job_queue: JobQueueService
     review_queue: ReviewQueueService
     rules_engine: RulesEngine
+    duplicate_matcher: DuplicateMatcher
     plugin_manager: PluginManager
     metadata_arbitrator: MetadataArbitrator
     scanner_worker: ScannerWorker
@@ -75,6 +81,7 @@ class Container:
     fingerprint_worker: FingerprintWorker
     metadata_worker: MetadataWorker
     rule_worker: RuleWorker
+    duplicate_worker: DuplicateWorker
     dispatcher: JobDispatcher
     event_bus: EventBus = field(default_factory=EventBus)
 
@@ -106,6 +113,7 @@ class Container:
         track_repo = TrackRepository(engine)
         review_repo = ReviewRepository(engine)
         rule_repo = RuleRepository(engine)
+        duplicate_repo = DuplicateRepository(engine)
         artist_repo = ArtistRepository(engine)
         file_identity_repo = FileIdentityRepository(engine)
         metadata_confidence_repo = MetadataConfidenceRepository(engine)
@@ -124,6 +132,7 @@ class Container:
             confidence_threshold=config.metadata.confidence_threshold,
         )
         rules_engine = RulesEngine(rule_repo, track_repo, artist_repo, review_queue, event_bus)
+        duplicate_matcher = DuplicateMatcher(QualityScorer(DEFAULT_WEIGHTS))
 
         plugin_manager = PluginManager(_build_metadata_providers(config.metadata))
         metadata_arbitrator = MetadataArbitrator(
@@ -142,7 +151,15 @@ class Container:
             job_queue,
             review_queue,
         )
-        rule_worker = RuleWorker(track_repo, rules_engine, job_queue)
+        rule_worker = RuleWorker(track_repo, rules_engine, duplicate_repo, job_queue)
+        duplicate_worker = DuplicateWorker(
+            track_repo,
+            file_identity_repo,
+            duplicate_repo,
+            duplicate_matcher,
+            review_queue,
+            job_queue,
+        )
         dispatcher = JobDispatcher(
             job_queue,
             scanner_worker,
@@ -150,6 +167,7 @@ class Container:
             fingerprint_worker,
             metadata_worker,
             rule_worker,
+            duplicate_worker,
             scanner_threads=config.pipeline.scanner_worker_threads,
             hash_processes=config.pipeline.hash_worker_processes,
             metadata_threads=config.pipeline.metadata_worker_threads,
@@ -167,6 +185,7 @@ class Container:
             job_repo=job_repo,
             review_repo=review_repo,
             rule_repo=rule_repo,
+            duplicate_repo=duplicate_repo,
             file_identity_repo=file_identity_repo,
             track_repo=track_repo,
             album_repo=AlbumRepository(engine),
@@ -176,6 +195,7 @@ class Container:
             job_queue=job_queue,
             review_queue=review_queue,
             rules_engine=rules_engine,
+            duplicate_matcher=duplicate_matcher,
             plugin_manager=plugin_manager,
             metadata_arbitrator=metadata_arbitrator,
             scanner_worker=scanner_worker,
@@ -183,6 +203,7 @@ class Container:
             fingerprint_worker=fingerprint_worker,
             metadata_worker=metadata_worker,
             rule_worker=rule_worker,
+            duplicate_worker=duplicate_worker,
             dispatcher=dispatcher,
             event_bus=event_bus,
         )

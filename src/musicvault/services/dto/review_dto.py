@@ -18,6 +18,7 @@ class ReviewItemCreate:
     title: str
     track_id: UUID | None = None
     album_id: UUID | None = None
+    duplicate_group_id: UUID | None = None
     description: str | None = None
     confidence: float | None = None
     payload: dict[str, Any] = field(default_factory=dict)

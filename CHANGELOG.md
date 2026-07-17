@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 9 duplicate detection** — exact-key duplicate grouping with
+  quality ranking:
+  - `DuplicateMatcher` (pure domain service) — builds groups from matched
+    tracks, best copy via `QualityScorer` (its first production consumer)
+  - Match tiers + confidences: content hash (1.0) > Chromaprint
+    `fingerprint_hash` (0.95) > `mb_recording_id` (0.90); `fuzzy` deferred
+  - `DuplicateGroup` / `DuplicateMember` entities; `DuplicateRepository`
+    (save/replace groups, candidate discovery, `has_lossless_duplicate`,
+    status/resolution); migration 0002 adds supporting indexes
+  - `DuplicateWorker` + dispatcher `detect_duplicates` route; persists
+    `tracks.quality_score` for grouped tracks, creates a
+    `possible_duplicate` review item linked via `duplicate_group_id`,
+    reuses the open group on re-detection
+  - Pipeline reordered: identify → `detect_duplicates` → `evaluate_rules`;
+    `RuleWorker` now computes the real `has_lossless_duplicate`, so the
+    Phase 8 archive-MP3 rule matches (zone move still parked until Phase 10)
+  - `ReviewItemCreate.duplicate_group_id` passthrough
+  - 374 tests total (up from 355)
+
+### Added
+
 - **Phase 8 rules engine** — user-configurable automation after identify:
   - `RulesEngine` — context build, evaluate/batch, apply matches, default
     seeding, CRUD (create/update/delete/list/enable)

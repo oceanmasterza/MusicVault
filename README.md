@@ -29,16 +29,18 @@ Collectors, audiophiles, and self-hosted media server operators using **Navidrom
 
 ## Status
 
-**Phase 8 — Rules Engine** (current)
+**Phase 9 — Duplicate Detection** (current)
 
 Architecture is finalized (v3). The runnable scaffold, database layer, domain
 models, and job pipeline are in place. The processing pipeline runs
 `ScannerWorker` → `HashWorker` → `FingerprintWorker` → `MetadataWorker` →
-`RuleWorker`. Uncertain metadata lands in the review queue; automation
-rules (VA detection, low bitrate, archive-when-FLAC stub) evaluate after
-identify. Unchanged files are skipped via size/mtime and content-hash
-checks. `python -m musicvault` bootstraps, recovers any orphaned jobs, and
-exits cleanly. See
+`DuplicateWorker` → `RuleWorker`. Uncertain metadata lands in the review
+queue; tracks sharing a content hash, Chromaprint fingerprint, or
+MusicBrainz recording ID are grouped with the best copy picked by quality
+score; automation rules (VA detection, low bitrate, archive-when-FLAC)
+evaluate last with the real duplicate flags. Unchanged files are skipped
+via size/mtime and content-hash checks. `python -m musicvault` bootstraps,
+recovers any orphaned jobs, and exits cleanly. See
 [Architecture Documentation](docs/architecture/README.md).
 
 ```powershell
@@ -47,7 +49,7 @@ cd musicvault
 python -m venv .venv
 .venv\Scripts\activate
 pip install -e ".[dev]"
-pytest              # 333 passed
+pytest              # 374 passed
 python -m musicvault  # MusicVault 0.1.0
 ```
 
@@ -107,8 +109,12 @@ python -m musicvault  # MusicVault 0.1.0
 | 2 | Database Layer | Complete |
 | 3 | Domain Models | Complete |
 | 4 | Job Dispatcher + Scanner/Hash Workers | Complete |
-| **5** | **Fingerprint Worker** | **Current** |
-| 6–16 | Metadata Arbitrator → GUI → Plugins → Installer | Planned |
+| 5 | Fingerprint Worker | Complete |
+| 6 | Metadata Arbitrator + Providers | Complete |
+| 7 | Review Queue | Complete |
+| 8 | Rules Engine | Complete |
+| **9** | **Duplicate Detection** | **Current** |
+| 10–16 | Organizer → Artwork → GUI → Plugins → Installer | Planned |
 
 ## License
 
