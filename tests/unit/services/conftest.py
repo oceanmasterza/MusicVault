@@ -36,9 +36,15 @@ def engine(tmp_path: Path) -> Iterator[Engine]:
     eng = create_engine(f"sqlite:///{db_path}")
 
     @event.listens_for(eng, "connect")
-    def _enable_foreign_keys(dbapi_connection: object, _record: object) -> None:
+    def _configure_connection(dbapi_connection: object, _record: object) -> None:
         cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
         cursor.execute("PRAGMA foreign_keys = ON")
+        # Dispatcher tests run the real poll loop + DatabaseWriter thread
+        # against this database. Match production's WAL + busy_timeout
+        # (musicvault.db.engine) so concurrent reads wait for writers
+        # instead of raising "database is locked" on slow CI runners.
+        cursor.execute("PRAGMA journal_mode = WAL")
+        cursor.execute("PRAGMA busy_timeout = 5000")
         cursor.close()
 
     metadata.create_all(eng)
