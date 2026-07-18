@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 13 reports** — library summary exports:
+  - `ReportService` builds on-demand aggregates (zone counts, lossless /
+    lossy, needs-review, embedded art, pending reviews by type, open
+    duplicate groups, quality buckets, average confidence)
+  - Built-in **JSON / CSV / HTML** exporters; Excel/PDF deferred
+  - `ReportWorker` + dispatcher `generate_report` route; default output
+    under `AppPaths.reports_dir`
+  - `library_stats` table still deferred (compute-on-demand for now)
+  - 487 tests total (up from 477)
+
+### Added
+
 - **Phase 12 rollback engine** — file moves are reversible:
   - `RollbackSnapshot` entity + `OperationRepository` snapshot APIs
     (`record_with_snapshot`, status/restore updates, `list_recent`);

@@ -29,17 +29,15 @@ Collectors, audiophiles, and self-hosted media server operators using **Navidrom
 
 ## Status
 
-**Phase 12 — Rollback Engine** (current)
+**Phase 13 — Reports** (current)
 
-Architecture is finalized (v3). The processing pipeline covers scanning,
-hashing, fingerprinting, metadata identification, duplicate detection,
-rules, physical file organization, watch folders, album artwork — and
-now **reversible operations**: every file move writes a compressed
-rollback snapshot alongside the operations/change-history audit trail.
-`OperationOrchestrator.rollback` restores a track's previous path and
-zone (with safe collision handling); `preview` / dry-run describe a
-move without touching the filesystem. See
-[Architecture Documentation](docs/architecture/README.md).
+Architecture is finalized (v3). The processing pipeline is complete
+through organize, artwork, and rollback. Phase 13 adds **library
+summary reports**: on-demand aggregates (tracks by zone, review backlog,
+duplicates, quality buckets, artwork coverage) exported as JSON, CSV, or
+HTML to `%APPDATA%/MusicVault/reports/` (or a caller-supplied path) via
+`ReportService` / `generate_report` jobs. Excel and PDF stay deferred.
+See [Architecture Documentation](docs/architecture/README.md).
 
 ```powershell
 git clone https://github.com/musicvault/musicvault.git
@@ -114,8 +112,9 @@ python -m musicvault  # MusicVault 0.1.0
 | 9 | Duplicate Detection | Complete |
 | 10 | Organizer + Watch Folder | Complete |
 | 11 | Artwork Worker | Complete |
-| **12** | **Rollback Engine** | **Current** |
-| 13–16 | Reports → GUI → Plugins → Installer | Planned |
+| 12 | Rollback Engine | Complete |
+| **13** | **Reports** | **Current** |
+| 14–16 | GUI → Plugins → Installer | Planned |
 
 ## License
 

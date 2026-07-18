@@ -36,6 +36,7 @@ class AppPaths:
     cache_dir: Path
     backups_dir: Path
     rollback_dir: Path
+    reports_dir: Path
 
     def ensure_created(self) -> None:
         """Create every directory required for the application to run."""
@@ -46,6 +47,7 @@ class AppPaths:
             self.cache_dir,
             self.backups_dir,
             self.rollback_dir,
+            self.reports_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
@@ -86,4 +88,5 @@ def get_app_paths(*, base_override: Path | None = None) -> AppPaths:
         cache_dir=root / "cache",
         backups_dir=root / "backups",
         rollback_dir=root / "rollback",
+        reports_dir=root / "reports",
     )

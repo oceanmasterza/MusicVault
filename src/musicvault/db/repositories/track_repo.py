@@ -10,15 +10,26 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Any
+from typing import Any, TypedDict
 from uuid import UUID
 
-from sqlalchemy import Engine, Row, select, update
+from sqlalchemy import Engine, Row, func, select, update
 
 from musicvault.db.repositories.base import batch_upsert
 from musicvault.db.tables import tracks as tracks_table
 from musicvault.db.uuid_utils import blob_to_uuid, uuid_to_blob
 from musicvault.models.entities.track import LibraryZone, Track
+
+
+class TrackReportSummary(TypedDict):
+    track_count: int
+    lossless_count: int
+    lossy_count: int
+    needs_review_count: int
+    has_embedded_art_count: int
+    missing_embedded_art_count: int
+    average_confidence: float | None
+    quality_buckets: dict[str, int]
 
 
 class TrackRepository:
@@ -70,6 +81,84 @@ class TrackRepository:
         with self._engine.connect() as conn:
             rows = conn.execute(statement).all()
         return [_from_row(row) for row in rows]
+
+    def count_by_zone(self, library_id: UUID) -> dict[str, int]:
+        """Track counts per zone for report aggregates (Phase 13)."""
+        statement = (
+            select(tracks_table.c.zone, func.count())
+            .where(tracks_table.c.library_id == uuid_to_blob(library_id))
+            .group_by(tracks_table.c.zone)
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(statement).all()
+        return {str(zone): int(count) for zone, count in rows}
+
+    def summarize_for_report(self, library_id: UUID) -> TrackReportSummary:
+        """Single-pass aggregates for :class:`~musicvault.services.report_service.ReportService`.
+
+        Returns counts that would otherwise require loading every track
+        row (docs/architecture/08-performance.md — reports must stream /
+        aggregate, not materialize 100k entities).
+        """
+        lib = uuid_to_blob(library_id)
+        with self._engine.connect() as conn:
+            total = int(
+                conn.execute(
+                    select(func.count()).where(tracks_table.c.library_id == lib)
+                ).scalar_one()
+            )
+            lossless = int(
+                conn.execute(
+                    select(func.count())
+                    .where(tracks_table.c.library_id == lib)
+                    .where(tracks_table.c.is_lossless.is_(True))
+                ).scalar_one()
+            )
+            needs_review = int(
+                conn.execute(
+                    select(func.count())
+                    .where(tracks_table.c.library_id == lib)
+                    .where(tracks_table.c.needs_review.is_(True))
+                ).scalar_one()
+            )
+            with_art = int(
+                conn.execute(
+                    select(func.count())
+                    .where(tracks_table.c.library_id == lib)
+                    .where(tracks_table.c.has_embedded_art.is_(True))
+                ).scalar_one()
+            )
+            avg_conf = conn.execute(
+                select(func.avg(tracks_table.c.overall_confidence)).where(
+                    tracks_table.c.library_id == lib
+                )
+            ).scalar_one()
+            # Quality buckets: null / low (<40) / mid / high (>=70)
+            quality_rows = conn.execute(
+                select(tracks_table.c.quality_score).where(tracks_table.c.library_id == lib)
+            ).all()
+
+        buckets = {"unscored": 0, "low": 0, "mid": 0, "high": 0}
+        for (score,) in quality_rows:
+            if score is None:
+                buckets["unscored"] += 1
+            elif int(score) < 40:
+                buckets["low"] += 1
+            elif int(score) < 70:
+                buckets["mid"] += 1
+            else:
+                buckets["high"] += 1
+
+        return {
+            "track_count": total,
+            "lossless_count": lossless,
+            "lossy_count": total - lossless,
+            "needs_review_count": needs_review,
+            "has_embedded_art_count": with_art,
+            "missing_embedded_art_count": total - with_art,
+            "average_confidence": float(avg_conf) if avg_conf is not None else None,
+            "quality_buckets": buckets,
+        }
 
     def update_zone(self, track_id: UUID, zone: LibraryZone) -> None:
         with self._engine.begin() as conn:

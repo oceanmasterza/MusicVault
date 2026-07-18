@@ -28,8 +28,8 @@ Phase 9   ██████████ Duplicate worker + quality scoring
 Phase 10  ██████████ Organizer + staging zones + watch folder
 Phase 11  ██████████ Artwork worker
 Phase 12  ██████████ Rollback engine
-Phase 13  ░░░░░░░░░░ Reports (CURRENT)
-Phase 14  ░░░░░░░░░░ GUI (all pages)
+Phase 13  ██████████ Reports
+Phase 14  ░░░░░░░░░░ GUI (all pages) (CURRENT)
 Phase 15  ░░░░░░░░░░ Media server plugins
 Phase 16  ░░░░░░░░░░ Packaging + installer
 ```
@@ -733,6 +733,31 @@ Phase 16  ░░░░░░░░░░ Packaging + installer
 ## Phase 13: Reports
 
 **Goal**: HTML, CSV, Excel, PDF reports.
+
+### Implementation notes
+- `ReportService` + `report_dto` — on-demand `library_summary` aggregates
+  (zone counts, lossless/lossy, review flags, embedded-art counts,
+  pending reviews by type, open duplicate groups, quality buckets,
+  average confidence). ``library_stats`` table stays deferred — counters
+  are computed via SQL aggregates rather than a materialized table
+  (Phase 14 dashboard can add caching when sub-500ms load is required).
+- Built-in exporters: **JSON**, **CSV**, **HTML**. Excel/PDF deferred
+  (extra deps, no template spec). `ReportExporter` protocol lives next
+  to the exporters (not a models interface — avoids a models→services
+  import).
+- `ReportWorker` + dispatcher `generate_report` route (shared I/O pool);
+  terminal job. `ReportService.enqueue` is the user/CLI entry point.
+- `AppPaths.reports_dir` (`%APPDATA%/MusicVault/reports/`) — default
+  output location when `output_path` is omitted.
+- GUI report viewer stays Phase 14.
+
+### Acceptance Criteria
+- [x] Library summary report aggregates zone / review / duplicate / quality stats
+- [x] JSON, CSV, and HTML exporters write to disk
+- [x] `generate_report` job route wired through dispatcher
+- [x] Reports directory created under app data paths
+- [x] CI green on GitHub Actions
+- [x] Git commit: `feat: Phase 13 ReportService + library summary exporters`
 
 ---
 

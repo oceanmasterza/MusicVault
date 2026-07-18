@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Engine, Row, insert, select, update
+from sqlalchemy import Engine, Row, func, insert, select, update
 
 from musicvault.db.tables import review_items
 from musicvault.db.uuid_utils import blob_to_uuid, uuid_to_blob
@@ -81,6 +81,18 @@ class ReviewRepository:
         with self._engine.connect() as conn:
             rows = conn.execute(statement).all()
         return [_from_row(row) for row in rows]
+
+    def count_pending_by_type(self, library_id: UUID) -> dict[str, int]:
+        """Pending review counts grouped by ``review_type`` (Phase 13 reports)."""
+        statement = (
+            select(review_items.c.review_type, func.count())
+            .where(review_items.c.library_id == uuid_to_blob(library_id))
+            .where(review_items.c.status == ReviewStatus.PENDING.value)
+            .group_by(review_items.c.review_type)
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(statement).all()
+        return {str(review_type): int(count) for review_type, count in rows}
 
     def update_pending_content(
         self,

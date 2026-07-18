@@ -33,6 +33,7 @@ from musicvault.services.job_dispatcher import JobDispatcher
 from musicvault.services.job_queue_service import JobQueueService
 from musicvault.services.metadata_arbitrator import MetadataArbitrator
 from musicvault.services.operation_orchestrator import OperationOrchestrator
+from musicvault.services.report_service import ReportService
 from musicvault.services.review_queue_service import ReviewQueueService
 from musicvault.services.rules_engine import RulesEngine
 from musicvault.services.watch_folder_service import WatchFolderService
@@ -42,6 +43,7 @@ from musicvault.workers.io.artwork_worker import ArtworkWorker
 from musicvault.workers.io.duplicate_worker import DuplicateWorker
 from musicvault.workers.io.metadata_worker import MetadataWorker
 from musicvault.workers.io.organizer_worker import OrganizerWorker
+from musicvault.workers.io.report_worker import ReportWorker
 from musicvault.workers.io.rule_worker import RuleWorker
 from musicvault.workers.io.scanner_worker import ScannerWorker
 
@@ -197,6 +199,17 @@ def test_bootstrap_wires_the_phase_12_rollback_stack(
 
     assert isinstance(container.operation_orchestrator, OperationOrchestrator)
     assert container.operation_orchestrator.list_recent(limit=1) == []
+    container.close()
+
+
+def test_bootstrap_wires_the_phase_13_report_stack(
+    app_paths: AppPaths, app_config: AppConfig
+) -> None:
+    container = Container.bootstrap(paths=app_paths, config=app_config)
+
+    assert isinstance(container.report_service, ReportService)
+    assert isinstance(container.report_worker, ReportWorker)
+    assert container.paths.reports_dir == app_paths.reports_dir
     container.close()
 
 

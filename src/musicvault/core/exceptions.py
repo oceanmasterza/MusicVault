@@ -61,3 +61,7 @@ class OperationError(MusicVaultError):
 
 class RollbackError(MusicVaultError):
     """Raised when restoring a rollback snapshot fails."""
+
+
+class ReportError(MusicVaultError):
+    """Raised when a report cannot be generated or written."""

@@ -51,6 +51,7 @@ from musicvault.services.job_dispatcher import JobDispatcher
 from musicvault.services.job_queue_service import JobQueueService
 from musicvault.services.metadata_arbitrator import MetadataArbitrator
 from musicvault.services.operation_orchestrator import OperationOrchestrator
+from musicvault.services.report_service import ReportService
 from musicvault.services.review_queue_service import ReviewQueueService
 from musicvault.services.rules_engine import RulesEngine
 from musicvault.services.watch_folder_service import WatchFolderService
@@ -60,6 +61,7 @@ from musicvault.workers.io.artwork_worker import ArtworkWorker
 from musicvault.workers.io.duplicate_worker import DuplicateWorker
 from musicvault.workers.io.metadata_worker import MetadataWorker
 from musicvault.workers.io.organizer_worker import OrganizerWorker
+from musicvault.workers.io.report_worker import ReportWorker
 from musicvault.workers.io.rule_worker import RuleWorker
 from musicvault.workers.io.scanner_worker import ScannerWorker
 
@@ -90,6 +92,7 @@ class Container:
     duplicate_matcher: DuplicateMatcher
     organize_engine: OrganizeEngine
     operation_orchestrator: OperationOrchestrator
+    report_service: ReportService
     watch_folder: WatchFolderService
     plugin_manager: PluginManager
     metadata_arbitrator: MetadataArbitrator
@@ -101,6 +104,7 @@ class Container:
     duplicate_worker: DuplicateWorker
     organizer_worker: OrganizerWorker
     artwork_worker: ArtworkWorker
+    report_worker: ReportWorker
     dispatcher: JobDispatcher
     event_bus: EventBus = field(default_factory=EventBus)
 
@@ -170,6 +174,14 @@ class Container:
             organize_engine,
             job_queue=job_queue,
         )
+        report_service = ReportService(
+            library_repo,
+            track_repo,
+            review_repo,
+            duplicate_repo,
+            reports_dir=paths.reports_dir,
+            job_queue=job_queue,
+        )
         watch_folder = WatchFolderService(
             library_repo,
             job_queue,
@@ -227,6 +239,7 @@ class Container:
             min_width=config.artwork.min_width,
             min_height=config.artwork.min_height,
         )
+        report_worker = ReportWorker(report_service, job_queue)
         dispatcher = JobDispatcher(
             job_queue,
             scanner_worker,
@@ -237,6 +250,7 @@ class Container:
             duplicate_worker,
             organizer_worker,
             artwork_worker,
+            report_worker,
             scanner_threads=config.pipeline.scanner_worker_threads,
             hash_processes=config.pipeline.hash_worker_processes,
             metadata_threads=config.pipeline.metadata_worker_threads,
@@ -271,6 +285,7 @@ class Container:
             duplicate_matcher=duplicate_matcher,
             organize_engine=organize_engine,
             operation_orchestrator=operation_orchestrator,
+            report_service=report_service,
             watch_folder=watch_folder,
             plugin_manager=plugin_manager,
             metadata_arbitrator=metadata_arbitrator,
@@ -282,6 +297,7 @@ class Container:
             duplicate_worker=duplicate_worker,
             organizer_worker=organizer_worker,
             artwork_worker=artwork_worker,
+            report_worker=report_worker,
             dispatcher=dispatcher,
             event_bus=event_bus,
         )

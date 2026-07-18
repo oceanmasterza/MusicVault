@@ -28,6 +28,7 @@ def test_get_app_paths_derives_all_locations_under_root(tmp_path: Path) -> None:
         paths.cache_dir,
         paths.backups_dir,
         paths.rollback_dir,
+        paths.reports_dir,
     ):
         assert paths.root == location or paths.root in location.parents
 
@@ -50,6 +51,7 @@ def test_ensure_created_creates_directory_tree(tmp_path: Path) -> None:
     assert paths.cache_dir.is_dir()
     assert paths.backups_dir.is_dir()
     assert paths.rollback_dir.is_dir()
+    assert paths.reports_dir.is_dir()
 
 
 def test_ensure_created_is_idempotent(tmp_path: Path) -> None:

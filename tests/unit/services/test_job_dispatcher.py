@@ -28,6 +28,7 @@ from musicvault.db.repositories.rule_repo import RuleRepository
 from musicvault.db.repositories.track_repo import TrackRepository
 from musicvault.db.writer import DatabaseWriter
 from musicvault.models.entities.job import JobStatus, JobType
+from musicvault.models.entities.library import Library
 from musicvault.models.services.duplicate_matcher import DuplicateMatcher
 from musicvault.models.services.organize_engine import OrganizeEngine
 from musicvault.models.services.quality_scorer import DEFAULT_WEIGHTS, QualityScorer
@@ -35,6 +36,7 @@ from musicvault.plugins.builtin.filename_parser import FilenameParserProvider
 from musicvault.services.job_dispatcher import JobDispatcher
 from musicvault.services.job_queue_service import JobQueueService
 from musicvault.services.metadata_arbitrator import MetadataArbitrator
+from musicvault.services.report_service import ReportService
 from musicvault.services.review_queue_service import ReviewQueueService
 from musicvault.services.rules_engine import RulesEngine
 from musicvault.workers.cpu.fingerprint_worker import FingerprintWorker
@@ -43,6 +45,7 @@ from musicvault.workers.io.artwork_worker import ArtworkWorker
 from musicvault.workers.io.duplicate_worker import DuplicateWorker
 from musicvault.workers.io.metadata_worker import MetadataWorker
 from musicvault.workers.io.organizer_worker import OrganizerWorker
+from musicvault.workers.io.report_worker import ReportWorker
 from musicvault.workers.io.rule_worker import RuleWorker
 from musicvault.workers.io.scanner_worker import ScannerWorker
 
@@ -134,6 +137,15 @@ def dispatcher(
         job_queue,
         artwork_dir=tmp_path / "artwork_cache",
     )
+    report_service = ReportService(
+        LibraryRepository(engine),
+        track_repo,
+        review_repo,
+        duplicate_repo,
+        reports_dir=tmp_path / "reports",
+        job_queue=job_queue,
+    )
+    report_worker = ReportWorker(report_service, job_queue)
     disp = JobDispatcher(
         job_queue,
         scanner,
@@ -144,6 +156,7 @@ def dispatcher(
         duplicate_worker,
         organizer_worker,
         artwork_worker,
+        report_worker,
         scanner_threads=1,
         hash_processes=1,
         metadata_threads=1,
@@ -503,6 +516,43 @@ def test_run_cycle_dispatches_a_fetch_artwork_job(
     assert job_repo.get(job_id).status is JobStatus.COMPLETED  # type: ignore[union-attr]
     pending = review_queue.get_pending(library_id)
     assert [item.review_type.value for item in pending] == ["artwork_missing"]
+
+
+def test_run_cycle_dispatches_a_generate_report_job(
+    dispatcher: JobDispatcher,
+    job_queue: JobQueueService,
+    job_repo: JobRepository,
+    library_id: UUID,
+    engine: Engine,
+    tmp_path: Path,
+) -> None:
+    """The report route is wired: job completes and writes a JSON file."""
+    LibraryRepository(engine).upsert(
+        Library(
+            id=library_id,
+            name="Dispatch Library",
+            incoming_path="C:/incoming",
+            staging_path="C:/staging",
+            library_path="C:/library",
+            archive_path="C:/archive",
+            created_at=_NOW,
+            updated_at=_NOW,
+        )
+    )
+    out = tmp_path / "dispatch_report.json"
+    job_id = job_queue.enqueue(
+        JobType.GENERATE_REPORT,
+        library_id,
+        {"format": "json", "output_path": str(out)},
+        now=_NOW,
+    )
+
+    futures = dispatcher.run_cycle()
+    assert len(futures) == 1
+    futures[0].result(timeout=_POLL_TIMEOUT_SECONDS)
+
+    assert job_repo.get(job_id).status is JobStatus.COMPLETED  # type: ignore[union-attr]
+    assert out.is_file()
 
 
 def test_run_cycle_dispatches_an_identify_metadata_job(
