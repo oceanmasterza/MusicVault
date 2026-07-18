@@ -45,7 +45,6 @@ from musicvault.models.entities.job import JobStatus, JobType  # noqa: E402
 from musicvault.models.entities.library import Library  # noqa: E402
 from musicvault.models.entities.track import LibraryZone  # noqa: E402
 
-
 _SAMPLE_TRACKS = (
     ("Demo Artist", "Demo Album", "Morning Light", 1),
     ("Demo Artist", "Demo Album", "Night Drive", 2),

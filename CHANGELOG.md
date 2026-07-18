@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Duplicate approval left the best track stuck in Staging** — resolving
+  a `possible_duplicate` review now also promotes the keeper to Library
+  when its review backlog is clear (same gate as other approvals).
+
 ### Added
 
 - **Self-contained Windows packaging** — pinned vendor binaries

@@ -265,43 +265,52 @@ class ReviewQueueService:
         if item.review_type is ReviewType.POSSIBLE_DUPLICATE:
             self._resolve_duplicate_group(item, now)
             return
-        self._promote_staging_track(item, now)
+        self._promote_staging_track(item.track_id, item.library_id, now)
 
     def _execute_parked_moves(self, item: ReviewItem, now: datetime) -> None:
         for zone in _parked_move_zones(item.payload or {}):
             self._enqueue_move_if_legal(item.library_id, item.track_id, zone, now)
 
     def _resolve_duplicate_group(self, item: ReviewItem, now: datetime) -> None:
-        """Keep the best copy; archive the other members where legal."""
+        """Keep the best copy; archive the other members where legal.
+
+        After archiving losers, promote the best copy from staging → library
+        when it has no remaining pending review items (otherwise a
+        duplicate approval as the *last* review left the keeper stuck in
+        staging forever).
+        """
         if self._duplicates is None or item.duplicate_group_id is None:
             return
         group_id = item.duplicate_group_id
         self._duplicates.set_status(
             group_id, GroupStatus.RESOLVED, resolution=GroupResolution.KEPT_BEST
         )
+        best_track_id: UUID | None = None
         for member in self._duplicates.get_members(group_id):
             if member.is_best:
+                best_track_id = member.track_id
                 continue
             self._enqueue_move_if_legal(item.library_id, member.track_id, LibraryZone.ARCHIVE, now)
+        if best_track_id is not None:
+            self._promote_staging_track(best_track_id, item.library_id, now)
 
-    def _promote_staging_track(self, item: ReviewItem, now: datetime) -> None:
-        """Approved metadata on a staging track promotes it to the library.
+    def _promote_staging_track(
+        self, track_id: UUID | None, library_id: UUID, now: datetime
+    ) -> None:
+        """Promote a staging track to the library when its review backlog is clear.
 
         Tracks still in incoming are left alone — the pipeline's own
         organize step moves them to staging first, and auto-approve or a
         later approval promotes them from there.
-
-        Promotion waits until *all* pending review items for the track
-        are resolved (mirrors organizer auto-approve).
         """
-        if item.track_id is None:
+        if track_id is None:
             return
-        if self._reviews.list_pending_for_track(item.track_id):
+        if self._reviews.list_pending_for_track(track_id):
             return
-        track = self._tracks.get_by_id(item.track_id)
+        track = self._tracks.get_by_id(track_id)
         if track is None or track.zone is not LibraryZone.STAGING:
             return
-        self._enqueue_move_if_legal(item.library_id, item.track_id, LibraryZone.LIBRARY, now)
+        self._enqueue_move_if_legal(library_id, track_id, LibraryZone.LIBRARY, now)
 
     def _enqueue_move_if_legal(
         self,

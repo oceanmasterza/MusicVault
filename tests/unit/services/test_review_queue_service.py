@@ -606,3 +606,61 @@ def test_approve_possible_duplicate_resolves_group_and_archives_non_best(
     assert _pending_organize_jobs(job_repo) == [
         {"track_id": str(loser_id), "target_zone": "archive"}
     ]
+
+
+def test_approve_possible_duplicate_promotes_best_from_staging(
+    wired_review_queue: ReviewQueueService,
+    track_repo: TrackRepository,
+    duplicate_repo: DuplicateRepository,
+    job_repo: JobRepository,
+    library_id: UUID,
+    track_id: UUID,
+) -> None:
+    """When the keeper is still in staging, resolving the duplicate must
+    also enqueue its move into the library (not leave it stranded)."""
+    track_repo.upsert(
+        _make_track(library_id, track_id, zone=LibraryZone.STAGING, needs_review=True)
+    )
+    loser_id = UUID("01800000-0000-7000-8000-00000000beef")
+    track_repo.upsert(
+        _make_track(
+            library_id,
+            loser_id,
+            zone=LibraryZone.STAGING,
+            needs_review=True,
+            file_path="C:/staging/loser.mp3",
+            file_name="loser.mp3",
+        )
+    )
+    group = DuplicateGroup(
+        id=UUID("01800000-0000-7000-8000-0000000000aa"),
+        library_id=library_id,
+        match_type=MatchType.FINGERPRINT,
+        match_confidence=0.95,
+        track_count=2,
+        detected_at=_NOW,
+        best_track_id=track_id,
+    )
+    duplicate_repo.save_group(
+        group,
+        [
+            DuplicateMember(group.id, track_id, quality_score=90, zone="staging", is_best=True),
+            DuplicateMember(group.id, loser_id, quality_score=40, zone="staging"),
+        ],
+    )
+    review_id = wired_review_queue.create_item(
+        ReviewItemCreate(
+            library_id=library_id,
+            review_type=ReviewType.POSSIBLE_DUPLICATE,
+            title="Possible duplicate",
+            track_id=track_id,
+            duplicate_group_id=group.id,
+        ),
+        now=_NOW,
+    )
+
+    wired_review_queue.approve(review_id, now=_NOW)
+
+    jobs = _pending_organize_jobs(job_repo)
+    assert {"track_id": str(loser_id), "target_zone": "archive"} in jobs
+    assert {"track_id": str(track_id), "target_zone": "library"} in jobs
