@@ -28,7 +28,7 @@ def test_default_config_uses_current_schema_version() -> None:
 
 def test_default_config_includes_metadata_section() -> None:
     assert default_config().metadata == MetadataConfig()
-    assert default_config().pipeline.metadata_worker_threads == 1
+    assert default_config().pipeline.metadata_worker_threads == 3
 
 
 def test_load_config_creates_default_file_when_missing(tmp_path: Path) -> None:
@@ -164,7 +164,7 @@ def test_migrating_a_v2_config_adds_metadata_section(tmp_path: Path) -> None:
     assert config.schema_version == CURRENT_SCHEMA_VERSION
     assert config.log_level == "WARNING"
     assert config.pipeline.db_writer_batch_size == 1000
-    assert config.pipeline.metadata_worker_threads == 1
+    assert config.pipeline.metadata_worker_threads == 3
     assert config.metadata == MetadataConfig()
 
 
@@ -220,6 +220,19 @@ def test_migrating_a_v5_config_adds_fingerprint_sampling_fields(tmp_path: Path) 
     assert config.schema_version == CURRENT_SCHEMA_VERSION
     assert config.metadata.fingerprint_mode == "all"
     assert config.metadata.fingerprint_sample_min == 3
+
+
+def test_migrating_a_v6_config_bumps_single_metadata_worker_thread(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    v6_document = default_config().to_dict()
+    v6_document["schema_version"] = 6
+    v6_document["pipeline"]["metadata_worker_threads"] = 1
+    config_path.write_text(json.dumps(v6_document), encoding="utf-8")
+
+    config = load_config(config_path)
+
+    assert config.schema_version == CURRENT_SCHEMA_VERSION
+    assert config.pipeline.metadata_worker_threads == 3
 
 
 def test_fingerprint_sampling_settings_round_trip(tmp_path: Path) -> None:

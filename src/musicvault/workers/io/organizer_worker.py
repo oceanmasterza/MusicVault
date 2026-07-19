@@ -15,7 +15,9 @@ manual). Moves into ``library`` enqueue ``sync_media_server``.
 
 Safe-move policy: destinations are never overwritten. On a name collision
 the new file gets a `` (1)`` / `` (2)`` suffix. :func:`shutil.move` handles
-cross-volume moves via copy2 + unlink; nothing is ever hard-deleted.
+cross-volume moves via copy2 + unlink. After an Incoming → elsewhere move,
+leftover non-audio junk (``.nfo``, covers, empty album folders, …) is
+removed once no audio remains in that folder tree.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
+from loguru import logger
 from sqlalchemy.exc import IntegrityError
 
 from musicvault.db.repositories.album_repo import AlbumRepository
@@ -53,6 +56,7 @@ from musicvault.models.entities.operation import (
 )
 from musicvault.models.entities.track import LibraryZone, Track
 from musicvault.models.services.organize_engine import OrganizeEngine
+from musicvault.services.incoming_cleanup import cleanup_incoming_after_move
 from musicvault.services.job_queue_service import JobQueueService
 
 
@@ -91,7 +95,12 @@ class OrganizerWorker:
             return
         if track.zone is target:
             # Idempotent redelivery (e.g. retried job) — nothing to do.
-            self._job_queue.mark_completed(job.id)
+            summary = f"Already in {target.value}: {track.file_name}"
+            self._job_queue.mark_completed(
+                job.id,
+                summary=summary,
+                result={"outcome": "noop", "summary": summary, "target_zone": target.value},
+            )
             return
         if not self._engine.can_transition(track.zone, target):
             self._job_queue.mark_failed(
@@ -131,6 +140,16 @@ class OrganizerWorker:
             self._tracks.upsert(updated)
         self._record_move(track, updated, now)
 
+        cleaned: list[str] = []
+        if track.zone is LibraryZone.INCOMING:
+            cleaned = cleanup_incoming_after_move(source, Path(library.incoming_path))
+            if cleaned:
+                logger.info(
+                    "Cleaned {} leftover Incoming path(s) after moving {}",
+                    len(cleaned),
+                    track.file_name,
+                )
+
         # Legacy/manual: tracks already in staging may still auto-promote.
         if target is LibraryZone.STAGING and self._should_auto_approve(updated, library):
             self._job_queue.enqueue(
@@ -142,7 +161,20 @@ class OrganizerWorker:
             )
         if target is LibraryZone.LIBRARY:
             self._enqueue_media_sync_if_idle(job.library_id, parent_job_id=job.id, now=now)
-        self._job_queue.mark_completed(job.id)
+        summary = f"Moved to {target.value}: {final.name}"
+        if cleaned:
+            summary += f" · cleaned {len(cleaned)} leftover Incoming item(s)"
+        self._job_queue.mark_completed(
+            job.id,
+            summary=summary,
+            result={
+                "outcome": "moved",
+                "summary": summary,
+                "target_zone": target.value,
+                "file_path": str(final),
+                "incoming_cleaned": len(cleaned),
+            },
+        )
 
     def _enqueue_media_sync_if_idle(
         self,

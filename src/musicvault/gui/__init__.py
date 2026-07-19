@@ -1,6 +1,7 @@
-"""PySide6 presentation layer (MVVM).
+"""PySide6 presentation layer.
 
-Phase 14 ships the shell and core pages (Library, Review, Jobs,
-Duplicates, Rules, Settings). Deferred pages use :class:`StubPage`.
+Ships the shell and core pages: Dashboard, Library (folder tree), Artists,
+Albums, Artwork, Review, Jobs, Duplicates, Rules, Logs, Settings. Reports
+viewer and Plugin manager still use :class:`StubPage`.
 See docs/architecture/06-gui-architecture.md.
 """

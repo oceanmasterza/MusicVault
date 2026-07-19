@@ -1,8 +1,11 @@
 # MusicVault Architecture Documentation
 
-Complete software architecture for MusicVault — designed before application code is written.
+Complete software architecture for MusicVault. Implementation has caught up
+with Phases 1–16 (pipeline, GUI browse pages, media servers, Windows Setup).
 
-> **Current version**: v3 (2026-07-15). Start with [12-pipeline-engine-v3.md](12-pipeline-engine-v3.md).
+> **Current version**: v3. Start with [12-pipeline-engine-v3.md](12-pipeline-engine-v3.md).
+> Post-MVP polish (plugin manager UI, Discogs, report viewer) is tracked in
+> [07-roadmap.md](07-roadmap.md) Phase 14 deferred notes.
 
 ## Documents
 

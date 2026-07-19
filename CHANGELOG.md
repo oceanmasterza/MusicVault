@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Browse UI** — Artists / Albums / Artwork pages (search, track drill-down,
+  cover status). Library page adds a zone **folder tree** (Incoming →
+  artist/album path segments) with a full-height track table.
+- **Force rescan** — Dashboard / File menu re-queues every Incoming audio
+  file; normal Scan still skips size/mtime-unchanged files. Scan and
+  pipeline jobs store short **completion summaries** (Jobs Details +
+  Dashboard processing report).
+- **Artwork performance** — prefer good embedded covers before Cover Art
+  Archive; reuse album art for sibling tracks; cache MusicBrainz
+  release lookups; skip enqueue when album already has a cover; default
+  I/O worker threads raised to 3 (config schema v7).
+- **Fingerprint sampling** — Settings: fingerprint all files vs sample
+  an album folder after N AcoustID confirms (trusted_folders).
+- **Incoming leftover cleanup** — after the last audio file leaves an
+  Incoming album folder, delete sidecars (`.nfo`, `.sfv`, covers,
+  playlists, …) and remove empty folders (Incoming root kept).
+- **In-place organize** — files stay in Incoming through identify/rules;
+  one move Incoming → Library on auto-approve or Review approve.
+- **Album-aware duplicates** — same song on different albums is not a
+  duplicate; confident same-album dups can auto keep-best / archive.
+
 ### Fixed
 
 - **Duplicate approval left the best track stuck in Staging** — resolving

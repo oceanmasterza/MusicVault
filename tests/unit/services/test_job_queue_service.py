@@ -101,6 +101,28 @@ def test_mark_completed_sets_status_and_completed_at(
     assert job.completed_at == _NOW
 
 
+def test_mark_completed_stores_summary_and_result_payload(
+    job_repo: JobRepository, pipeline_config: PipelineConfig, library_id: UUID
+) -> None:
+    service = JobQueueService(job_repo, pipeline_config)
+    job_id = service.enqueue(JobType.FETCH_ARTWORK, library_id, {"track_id": "x"}, now=_NOW)
+
+    service.mark_completed(
+        job_id,
+        now=_NOW,
+        summary="Cover saved (embedded_art, 600x600) for 'a.flac'",
+        result={"outcome": "saved", "width": 600},
+    )
+
+    job = job_repo.get(job_id)
+    assert job is not None
+    assert job.status is JobStatus.COMPLETED
+    assert job.error_message == "Cover saved (embedded_art, 600x600) for 'a.flac'"
+    assert job.payload["outcome"] == "saved"
+    assert job.payload["width"] == 600
+    assert job.payload["track_id"] == "x"
+
+
 def test_mark_failed_is_a_noop_for_an_unknown_job(
     job_repo: JobRepository, pipeline_config: PipelineConfig
 ) -> None:

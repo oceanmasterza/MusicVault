@@ -18,7 +18,7 @@ from typing import Any
 
 from musicvault.core.exceptions import ConfigError, ConfigMigrationError, ConfigVersionError
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 
 @dataclass(frozen=True)
@@ -61,7 +61,7 @@ class PipelineConfig:
     job_claim_batch_size: int = 10
     scanner_worker_threads: int = 1
     hash_worker_processes: int | None = None
-    metadata_worker_threads: int = 1
+    metadata_worker_threads: int = 3
     retry_base_delay_seconds: float = 5.0
     retry_max_delay_seconds: float = 300.0
 
@@ -165,12 +165,25 @@ def _migrate_v5_to_v6(raw: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
+def _migrate_v6_to_v7(raw: dict[str, Any]) -> dict[str, Any]:
+    """Raise I/O worker concurrency so artwork/identify aren't single-threaded."""
+    migrated = dict(raw)
+    migrated["schema_version"] = 7
+    pipeline = dict(migrated.get("pipeline") or asdict(PipelineConfig()))
+    # Only bump the old default of 1; leave deliberate higher values alone.
+    if int(pipeline.get("metadata_worker_threads") or 1) <= 1:
+        pipeline["metadata_worker_threads"] = 3
+    migrated["pipeline"] = pipeline
+    return migrated
+
+
 _MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
     3: _migrate_v3_to_v4,
     4: _migrate_v4_to_v5,
     5: _migrate_v5_to_v6,
+    6: _migrate_v6_to_v7,
 }
 
 

@@ -6,8 +6,8 @@ from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 
 class StubPage(QWidget):
-    """Simple “coming soon” placeholder used for pages deferred past the
-    Phase 14 MVP (Artists, Albums, Artwork viewer, Reports, Logs, Plugins).
+    """Simple placeholder for surfaces not yet built (Reports viewer,
+    Plugin manager). Most Phase 14 pages are real views now.
     """
 
     def __init__(self, title: str, message: str, parent: QWidget | None = None) -> None:

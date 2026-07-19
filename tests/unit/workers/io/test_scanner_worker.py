@@ -300,6 +300,129 @@ def test_process_file_logs_and_continues_when_a_file_disappears_mid_scan(
     job = job_repo.get(job_id)
     assert job is not None
 
-    worker._process_file(job, tmp_path / "vanished.flac", LibraryZone.INCOMING)  # noqa: SLF001
+    worker._process_file(
+        job, tmp_path / "vanished.flac", LibraryZone.INCOMING, force=False
+    )  # noqa: SLF001
 
     assert track_repo.get_by_path(str(tmp_path / "vanished.flac")) is None
+
+
+def test_execute_force_requeues_unchanged_files(
+    job_repo: JobRepository,
+    job_queue: JobQueueService,
+    track_repo: TrackRepository,
+    file_identity_repo: FileIdentityRepository,
+    database_writer: DatabaseWriter,
+    library_id: UUID,
+    tmp_path: Path,
+) -> None:
+    audio_file = tmp_path / "track.flac"
+    audio_file.write_bytes(b"fake flac content")
+    stat = audio_file.stat()
+    file_modified = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+
+    track_id = generate_uuid7()
+    track_repo.upsert(
+        Track(
+            id=track_id,
+            library_id=library_id,
+            zone=LibraryZone.INCOMING,
+            file_path=str(audio_file),
+            file_name=audio_file.name,
+            file_size=stat.st_size,
+            file_modified=file_modified,
+            created_at=_NOW,
+            updated_at=_NOW,
+        )
+    )
+    file_identity_repo.upsert(
+        FileIdentity(
+            track_id=track_id,
+            content_hash_sha256="a" * 64,
+            file_size=stat.st_size,
+            file_modified=file_modified,
+        )
+    )
+
+    worker = _make_worker(track_repo, file_identity_repo, database_writer, job_queue)
+    job_id = job_queue.enqueue(
+        JobType.SCAN_DIRECTORY,
+        library_id,
+        {"directory": str(tmp_path), "zone": "incoming", "force": True},
+        now=_NOW,
+    )
+    job = job_repo.get(job_id)
+    assert job is not None
+
+    worker.execute(job)
+    database_writer.stop()
+
+    hash_jobs = [
+        j
+        for j in job_repo.list_by_status(JobStatus.PENDING, library_id=library_id)
+        if j.job_type is JobType.HASH_FILE
+    ]
+    assert len(hash_jobs) == 1
+    assert hash_jobs[0].payload.get("force") is True
+    completed = job_repo.get(job_id)
+    assert completed is not None
+    assert completed.status is JobStatus.COMPLETED
+    assert completed.error_message is not None
+    assert "force" in completed.error_message
+    assert "1 queued" in completed.error_message
+    assert completed.payload.get("files_skipped") == 0
+    assert completed.payload.get("files_queued") == 1
+
+
+def test_execute_records_skip_summary_for_unchanged_files(
+    job_repo: JobRepository,
+    job_queue: JobQueueService,
+    track_repo: TrackRepository,
+    file_identity_repo: FileIdentityRepository,
+    database_writer: DatabaseWriter,
+    library_id: UUID,
+    tmp_path: Path,
+) -> None:
+    audio_file = tmp_path / "track.flac"
+    audio_file.write_bytes(b"fake flac content")
+    stat = audio_file.stat()
+    file_modified = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+    track_id = generate_uuid7()
+    track_repo.upsert(
+        Track(
+            id=track_id,
+            library_id=library_id,
+            zone=LibraryZone.INCOMING,
+            file_path=str(audio_file),
+            file_name=audio_file.name,
+            file_size=stat.st_size,
+            file_modified=file_modified,
+            created_at=_NOW,
+            updated_at=_NOW,
+        )
+    )
+    file_identity_repo.upsert(
+        FileIdentity(
+            track_id=track_id,
+            content_hash_sha256="a" * 64,
+            file_size=stat.st_size,
+            file_modified=file_modified,
+        )
+    )
+    worker = _make_worker(track_repo, file_identity_repo, database_writer, job_queue)
+    job_id = job_queue.enqueue(
+        JobType.SCAN_DIRECTORY,
+        library_id,
+        {"directory": str(tmp_path), "zone": "incoming"},
+        now=_NOW,
+    )
+    job = job_repo.get(job_id)
+    assert job is not None
+    worker.execute(job)
+
+    completed = job_repo.get(job_id)
+    assert completed is not None
+    assert completed.status is JobStatus.COMPLETED
+    assert "1 unchanged skipped" in (completed.error_message or "")
+    assert completed.payload.get("files_queued") == 0
+    assert completed.payload.get("files_skipped") == 1

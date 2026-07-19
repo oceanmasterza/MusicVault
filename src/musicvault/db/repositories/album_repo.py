@@ -7,12 +7,15 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Engine, Row, select
+from sqlalchemy import Engine, Row, exists, func, or_, select
 
 from musicvault.db.repositories.base import batch_upsert
+from musicvault.db.tables import album_artwork, artists
 from musicvault.db.tables import albums as albums_table
+from musicvault.db.tables import tracks as tracks_table
 from musicvault.db.uuid_utils import blob_to_uuid, uuid_to_blob
 from musicvault.models.entities.album import Album
+from musicvault.services.dto.browse_dto import AlbumBrowseRow
 
 
 class AlbumRepository:
@@ -51,6 +54,77 @@ class AlbumRepository:
         with self._engine.connect() as conn:
             rows = conn.execute(statement).all()
         return [_from_row(row) for row in rows]
+
+    def list_for_library(
+        self,
+        library_id: UUID,
+        *,
+        artist_id: UUID | None = None,
+        query: str | None = None,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> list[AlbumBrowseRow]:
+        """Albums linked to tracks in this library, with artist name and cover flag."""
+        lib = uuid_to_blob(library_id)
+        track_count = func.count(tracks_table.c.id).label("track_count")
+        has_cover = exists(
+            select(album_artwork.c.artwork_id).where(
+                album_artwork.c.album_id == albums_table.c.id
+            )
+        ).label("has_cover")
+        statement = (
+            select(
+                albums_table.c.id,
+                albums_table.c.title,
+                albums_table.c.sort_title,
+                albums_table.c.album_artist_id,
+                albums_table.c.year,
+                albums_table.c.mbid,
+                artists.c.name.label("artist_name"),
+                track_count,
+                has_cover,
+            )
+            .join(tracks_table, tracks_table.c.album_id == albums_table.c.id)
+            .outerjoin(artists, artists.c.id == albums_table.c.album_artist_id)
+            .where(tracks_table.c.library_id == lib)
+            .group_by(
+                albums_table.c.id,
+                albums_table.c.title,
+                albums_table.c.sort_title,
+                albums_table.c.album_artist_id,
+                albums_table.c.year,
+                albums_table.c.mbid,
+                artists.c.name,
+            )
+            .order_by(artists.c.name, albums_table.c.year, albums_table.c.sort_title)
+            .offset(offset)
+            .limit(limit)
+        )
+        if artist_id is not None:
+            statement = statement.where(
+                albums_table.c.album_artist_id == uuid_to_blob(artist_id)
+            )
+        if query:
+            like = f"%{query}%"
+            statement = statement.where(
+                or_(albums_table.c.title.ilike(like), artists.c.name.ilike(like))
+            )
+        with self._engine.connect() as conn:
+            rows = conn.execute(statement).all()
+        return [
+            AlbumBrowseRow(
+                album_id=blob_to_uuid(row.id),
+                title=row.title,
+                sort_title=row.sort_title,
+                artist_name=row.artist_name,
+                artist_id=blob_to_uuid(row.album_artist_id) if row.album_artist_id else None,
+                year=row.year,
+                track_count=int(row.track_count),
+                has_cover=bool(row.has_cover),
+                mbid=row.mbid,
+            )
+            for row in rows
+        ]
 
 
 def _to_row(album: Album) -> dict[str, object]:

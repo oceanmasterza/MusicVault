@@ -144,6 +144,7 @@ tracks = Table(
     Index("idx_tracks_library_zone", "library_id", "zone"),
     Index("idx_tracks_file_path", "file_path", unique=True),
     Index("idx_tracks_album", "album_id"),
+    Index("idx_tracks_artist", "artist_id"),
     Index("idx_tracks_mb_recording", "mb_recording_id"),
     Index("idx_tracks_needs_review", "needs_review", sqlite_where=text("needs_review = TRUE")),
     Index("idx_tracks_quality", "quality_score"),

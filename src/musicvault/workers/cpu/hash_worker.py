@@ -142,7 +142,7 @@ class HashWorker:
             )
         )
 
-        if content_changed:
+        if content_changed or bool(job.payload.get("force")):
             file_path = job.payload["file_path"]
             track = None
             if self._tracks is not None:
@@ -154,6 +154,7 @@ class HashWorker:
                 and self._folder_trust is not None
                 and track is not None
                 and self._folder_trust.is_trusted_for_track(track)
+                and not bool(job.payload.get("force"))
             )
             if skip_fingerprint:
                 self._job_queue.enqueue(
@@ -163,13 +164,16 @@ class HashWorker:
                     parent_job_id=job.id,
                 )
             else:
+                fp_payload: dict[str, object] = {
+                    "track_id": str(track_id),
+                    "file_path": file_path,
+                }
+                if job.payload.get("force"):
+                    fp_payload["force"] = True
                 self._job_queue.enqueue(
                     JobType.FINGERPRINT_FILE,
                     job.library_id,
-                    {
-                        "track_id": str(track_id),
-                        "file_path": file_path,
-                    },
+                    fp_payload,
                     parent_job_id=job.id,
                 )
         self._job_queue.mark_completed(job.id)

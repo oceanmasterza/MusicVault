@@ -252,6 +252,7 @@ class Container:
             review_queue,
             artist_repo=artist_repo,
             album_repo=album_repo,
+            artwork_repo=artwork_repo,
             folder_trust=folder_trust,
             fingerprint_mode=config.metadata.fingerprint_mode,
         )

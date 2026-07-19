@@ -18,7 +18,9 @@ The Archive answers ``/front`` with a redirect to the actual image;
 miss, not an error.
 
 MusicBrainz etiquette (≤ 1 request/second) is enforced for MB API
-calls; CAA image fetches are not throttled beyond that.
+calls; CAA image fetches are not throttled beyond that. Recording and
+artist+album → release lookups are cached in-process so album mates do
+not repeat the same MusicBrainz search.
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ _MB_RECORDING_URL = "https://musicbrainz.org/ws/2/recording/"
 _MB_RELEASE_URL = "https://musicbrainz.org/ws/2/release/"
 _USER_AGENT = "MusicVault/0.1.0 (https://github.com/oceanmasterza/MusicVault)"
 _MIN_INTERVAL_SECONDS = 1.05
+_LOOKUP_CACHE_LIMIT = 512
 
 
 class CoverArtArchiveProvider:
@@ -58,6 +61,9 @@ class CoverArtArchiveProvider:
         self._timeout = timeout_seconds
         self._rate_lock = threading.Lock()
         self._last_request_at = 0.0
+        self._cache_lock = threading.Lock()
+        # Shared across threads: recording/search → release id (incl. misses).
+        self._release_cache: dict[str, str | None] = {}
 
     def fetch(self, query: ArtworkQuery) -> ArtworkResult | None:
         if query.mb_release_id:
@@ -119,40 +125,56 @@ class CoverArtArchiveProvider:
         )
 
     def _resolve_release_id(self, recording_mbid: str) -> str | None:
+        cache_key = f"rec:{recording_mbid}"
+        with self._cache_lock:
+            if cache_key in self._release_cache:
+                return self._release_cache[cache_key]
         payload = self._get_json(
             f"{_MB_RECORDING_URL}{quote(recording_mbid)}",
             {"fmt": "json", "inc": "releases"},
         )
-        if payload is None:
-            return None
-        releases = payload.get("releases") or []
-        if not releases:
-            return None
-        release_id = releases[0].get("id")
-        return str(release_id) if release_id else None
+        release_id: str | None = None
+        if payload is not None:
+            releases = payload.get("releases") or []
+            if releases:
+                value = releases[0].get("id")
+                release_id = str(value) if value else None
+        self._cache_put(cache_key, release_id)
+        return release_id
 
     def _search_release_id(self, artist: str, album: str) -> str | None:
         """Find a MusicBrainz release id from artist + album tags."""
+        cache_key = f"search:{_normalize(artist)}|{_normalize(album)}"
+        with self._cache_lock:
+            if cache_key in self._release_cache:
+                return self._release_cache[cache_key]
         query = f'artist:"{_escape_lucene(artist)}" AND release:"{_escape_lucene(album)}"'
         payload = self._get_json(
             _MB_RELEASE_URL,
             {"query": query, "fmt": "json", "limit": 5},
         )
-        if payload is None:
-            return None
-        releases = payload.get("releases") or []
-        if not releases:
-            return None
-        wanted = _normalize(album)
-        exact = [
-            release
-            for release in releases
-            if _normalize(str(release.get("title") or "")) == wanted
-        ]
-        pool = exact or releases
-        best = max(pool, key=lambda item: float(item.get("score") or 0.0))
-        release_id = best.get("id")
-        return str(release_id) if release_id else None
+        release_id: str | None = None
+        if payload is not None:
+            releases = payload.get("releases") or []
+            if releases:
+                wanted = _normalize(album)
+                exact = [
+                    release
+                    for release in releases
+                    if _normalize(str(release.get("title") or "")) == wanted
+                ]
+                pool = exact or releases
+                best = max(pool, key=lambda item: float(item.get("score") or 0.0))
+                value = best.get("id")
+                release_id = str(value) if value else None
+        self._cache_put(cache_key, release_id)
+        return release_id
+
+    def _cache_put(self, key: str, value: str | None) -> None:
+        with self._cache_lock:
+            if len(self._release_cache) >= _LOOKUP_CACHE_LIMIT and key not in self._release_cache:
+                self._release_cache.pop(next(iter(self._release_cache)))
+            self._release_cache[key] = value
 
     def _get_json(self, url: str, params: dict[str, str | int]) -> dict[str, Any] | None:
         self._throttle()

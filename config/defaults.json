@@ -1,5 +1,5 @@
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "log_level": "INFO",
   "theme": "dark",
   "pipeline": {
@@ -8,7 +8,7 @@
     "job_claim_batch_size": 10,
     "scanner_worker_threads": 1,
     "hash_worker_processes": null,
-    "metadata_worker_threads": 1,
+    "metadata_worker_threads": 3,
     "retry_base_delay_seconds": 5.0,
     "retry_max_delay_seconds": 300.0
   },

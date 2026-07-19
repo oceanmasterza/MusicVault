@@ -13,9 +13,10 @@ from datetime import datetime
 from typing import Any, TypedDict
 from uuid import UUID
 
-from sqlalchemy import Engine, Row, func, select, update
+from sqlalchemy import Engine, Row, func, or_, select, update
 
 from musicvault.db.repositories.base import batch_upsert
+from musicvault.db.tables import track_artwork
 from musicvault.db.tables import tracks as tracks_table
 from musicvault.db.uuid_utils import blob_to_uuid, uuid_to_blob
 from musicvault.models.entities.track import LibraryZone, Track
@@ -30,6 +31,11 @@ class TrackReportSummary(TypedDict):
     missing_embedded_art_count: int
     average_confidence: float | None
     quality_buckets: dict[str, int]
+    artists_linked: int
+    albums_linked: int
+    tracks_with_artist: int
+    tracks_with_album: int
+    tracks_with_cover: int
 
 
 class TrackRepository:
@@ -133,6 +139,42 @@ class TrackRepository:
                     tracks_table.c.library_id == lib
                 )
             ).scalar_one()
+            artists_linked = int(
+                conn.execute(
+                    select(func.count(func.distinct(tracks_table.c.artist_id)))
+                    .where(tracks_table.c.library_id == lib)
+                    .where(tracks_table.c.artist_id.is_not(None))
+                ).scalar_one()
+            )
+            albums_linked = int(
+                conn.execute(
+                    select(func.count(func.distinct(tracks_table.c.album_id)))
+                    .where(tracks_table.c.library_id == lib)
+                    .where(tracks_table.c.album_id.is_not(None))
+                ).scalar_one()
+            )
+            tracks_with_artist = int(
+                conn.execute(
+                    select(func.count())
+                    .where(tracks_table.c.library_id == lib)
+                    .where(tracks_table.c.artist_id.is_not(None))
+                ).scalar_one()
+            )
+            tracks_with_album = int(
+                conn.execute(
+                    select(func.count())
+                    .where(tracks_table.c.library_id == lib)
+                    .where(tracks_table.c.album_id.is_not(None))
+                ).scalar_one()
+            )
+            tracks_with_cover = int(
+                conn.execute(
+                    select(func.count())
+                    .select_from(tracks_table)
+                    .join(track_artwork, track_artwork.c.track_id == tracks_table.c.id)
+                    .where(tracks_table.c.library_id == lib)
+                ).scalar_one()
+            )
             # Quality buckets: null / low (<40) / mid / high (>=70)
             quality_rows = conn.execute(
                 select(tracks_table.c.quality_score).where(tracks_table.c.library_id == lib)
@@ -158,6 +200,11 @@ class TrackRepository:
             "missing_embedded_art_count": total - with_art,
             "average_confidence": float(avg_conf) if avg_conf is not None else None,
             "quality_buckets": buckets,
+            "artists_linked": artists_linked,
+            "albums_linked": albums_linked,
+            "tracks_with_artist": tracks_with_artist,
+            "tracks_with_album": tracks_with_album,
+            "tracks_with_cover": tracks_with_cover,
         }
 
     def confidence_distribution(self, library_id: UUID) -> dict[str, int]:
@@ -192,6 +239,91 @@ class TrackRepository:
             else:
                 buckets["high"] += 1
         return buckets
+
+    def list_by_artist(
+        self,
+        library_id: UUID,
+        artist_id: UUID,
+        *,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> Sequence[Track]:
+        statement = (
+            select(tracks_table)
+            .where(tracks_table.c.library_id == uuid_to_blob(library_id))
+            .where(tracks_table.c.artist_id == uuid_to_blob(artist_id))
+            .order_by(tracks_table.c.album_id, tracks_table.c.track_number, tracks_table.c.file_name)
+            .offset(offset)
+            .limit(limit)
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(statement).all()
+        return [_from_row(row) for row in rows]
+
+    def list_by_album(
+        self,
+        library_id: UUID,
+        album_id: UUID,
+        *,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> Sequence[Track]:
+        statement = (
+            select(tracks_table)
+            .where(tracks_table.c.library_id == uuid_to_blob(library_id))
+            .where(tracks_table.c.album_id == uuid_to_blob(album_id))
+            .order_by(tracks_table.c.disc_number, tracks_table.c.track_number, tracks_table.c.file_name)
+            .offset(offset)
+            .limit(limit)
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(statement).all()
+        return [_from_row(row) for row in rows]
+
+    def list_by_path_prefix(
+        self,
+        library_id: UUID,
+        path_prefix: str,
+        *,
+        zone: LibraryZone | None = None,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> Sequence[Track]:
+        """Tracks under ``path_prefix`` (folder browse; avoids sibling-prefix matches)."""
+        prefix = path_prefix.rstrip("\\/")
+        statement = (
+            select(tracks_table)
+            .where(tracks_table.c.library_id == uuid_to_blob(library_id))
+            .where(
+                or_(
+                    tracks_table.c.file_path.startswith(prefix + "\\"),
+                    tracks_table.c.file_path.startswith(prefix + "/"),
+                    tracks_table.c.file_path == prefix,
+                )
+            )
+            .order_by(tracks_table.c.file_path)
+            .offset(offset)
+            .limit(limit)
+        )
+        if zone is not None:
+            statement = statement.where(tracks_table.c.zone == zone.value)
+        with self._engine.connect() as conn:
+            rows = conn.execute(statement).all()
+        return [_from_row(row) for row in rows]
+
+    def list_paths_for_library(
+        self, library_id: UUID, *, limit: int = 5000
+    ) -> list[tuple[str, str]]:
+        """Lightweight ``(zone, file_path)`` rows for building the folder tree."""
+        statement = (
+            select(tracks_table.c.zone, tracks_table.c.file_path)
+            .where(tracks_table.c.library_id == uuid_to_blob(library_id))
+            .order_by(tracks_table.c.file_path)
+            .limit(limit)
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(statement).all()
+        return [(str(zone), str(path)) for zone, path in rows]
 
     def update_zone(self, track_id: UUID, zone: LibraryZone) -> None:
         with self._engine.begin() as conn:

@@ -75,7 +75,10 @@ class FingerprintWorker:
         Used by :class:`~musicvault.services.job_dispatcher.JobDispatcher`
         to skip ProcessPool work on crash-recovery re-delivery: complete
         the job and chain to ``identify_metadata`` without recomputing.
+        Force-rescan jobs always recompute.
         """
+        if job.payload.get("force"):
+            return False
         track_id = UUID(job.payload["track_id"])
         identity = self._file_identity_repo.get(track_id)
         return identity is not None and identity.fingerprint_data is not None

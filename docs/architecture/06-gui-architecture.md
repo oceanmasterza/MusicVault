@@ -37,23 +37,23 @@ Sidebar badge on **Review** shows pending review item count.
 
 ## Pages
 
-| Page | ViewModel | Primary Purpose |
-|------|-----------|----------------|
-| Dashboard | `DashboardViewModel` | Stats, job summary, recent activity |
-| Library | `LibraryViewModel` | Browse tracks by zone (library/staging/archive) |
-| **Review** | `ReviewViewModel` | Approve/reject/edit uncertain items |
-| Artists | `ArtistsViewModel` | Artist list + albums |
-| Albums | `AlbumsViewModel` | Album grid with artwork |
-| **Duplicates** | `DuplicatesViewModel` | Visual duplicate comparison |
-| **Jobs** | `JobMonitorViewModel` | Job queue monitor (render farm view) |
-| Artwork | `ArtworkViewModel` | Missing/low-res artwork |
-| Reports | `ReportsViewModel` | Generate and preview reports |
-| **Rules** | `RulesViewModel` | Create/edit/test automation rules |
-| Logs | `LogsViewModel` | Log viewer with filters |
-| Settings | `SettingsViewModel` | All configuration |
-| Plugins | `PluginsViewModel` | Enable/configure/prioritize plugins |
+| Page | Status | Primary Purpose |
+|------|--------|-----------------|
+| Dashboard | Shipped | KPIs, pipeline, Force rescan, processing report |
+| Library | Shipped | Folder tree + tracks by zone / path prefix |
+| **Review** | Shipped | Approve/reject/edit uncertain items |
+| Artists | Shipped | Artist list + track drill-down |
+| Albums | Shipped | Album list + cover flag + tracks |
+| **Duplicates** | Shipped | Open duplicate groups |
+| **Jobs** | Shipped | Job queue monitor + completion Details |
+| Artwork | Shipped | Album cover OK / low-res / missing |
+| Reports | Stub | Generate via jobs; in-app viewer deferred |
+| **Rules** | Shipped | List / enable rules (visual builder deferred) |
+| Logs | Shipped | Open log folder / tail helpers |
+| Settings | Shipped | Libraries, fingerprint mode, media servers |
+| Plugins | Stub | Enable/configure plugins (manager UI next) |
 
-Bold = new in v2.
+Bold = introduced as first-class in architecture v2.
 
 ## Review Queue Page
 

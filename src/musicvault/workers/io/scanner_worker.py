@@ -7,9 +7,8 @@ references directly — threads share the parent process's memory, so
 nothing needs to cross a pickling boundary here.
 
 `Job.payload` contract for `scan_directory`: ``{"directory": str,
-"zone": str}`` (a `LibraryZone` value) — not specified by name in the
-architecture docs beyond "the path", so this module defines it. The
-target library is `Job.library_id` itself, not part of the payload.
+"zone": str, "force": bool?}`` — ``force=True`` re-queues every audio
+file even when size/mtime match a prior scan (dashboard “Force rescan”).
 """
 
 from __future__ import annotations
@@ -61,12 +60,9 @@ class ScannerWorker:
     def execute(self, job: Job) -> None:
         directory = Path(job.payload["directory"])
         zone = LibraryZone(job.payload["zone"])
+        force = bool(job.payload.get("force"))
 
         if not directory.is_dir():
-            # `Path.rglob` silently yields nothing for a missing directory
-            # rather than raising — checked explicitly so a mistyped or
-            # since-removed library path fails loudly instead of "completing"
-            # a scan that quietly found and did nothing.
             self._job_queue.mark_failed(job.id, f"{directory} is not a directory")
             return
 
@@ -76,32 +72,57 @@ class ScannerWorker:
             self._job_queue.mark_failed(job.id, f"Failed to list {directory}: {exc}")
             return
 
+        found = 0
+        skipped = 0
+        queued = 0
         for path in audio_files:
-            self._process_file(job, path, zone)
+            found += 1
+            outcome = self._process_file(job, path, zone, force=force)
+            if outcome == "skipped":
+                skipped += 1
+            elif outcome == "queued":
+                queued += 1
 
-        self._job_queue.mark_completed(job.id)
+        summary = (
+            f"Scan {'(force) ' if force else ''}complete: "
+            f"{found} audio file(s), {queued} queued for processing, "
+            f"{skipped} unchanged skipped."
+        )
+        self._job_queue.mark_completed(
+            job.id,
+            summary=summary,
+            result={
+                "summary": summary,
+                "files_found": found,
+                "files_queued": queued,
+                "files_skipped": skipped,
+                "force": force,
+            },
+        )
 
-    def _process_file(self, job: Job, path: Path, zone: LibraryZone) -> None:
+    def _process_file(
+        self, job: Job, path: Path, zone: LibraryZone, *, force: bool
+    ) -> str:
         try:
             stat = path.stat()
         except OSError as exc:
             logger.warning("Skipping {} — could not stat it: {}", path, exc)
-            return
+            return "error"
 
         existing = self._track_repo.get_by_path(str(path))
         track_id = existing.id if existing is not None else generate_uuid7()
         file_modified = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
 
-        if existing is not None:
+        if existing is not None and not force:
             identity = self._file_identity_repo.get(track_id)
             if identity is not None and identity.matches_current_file(
                 file_size=stat.st_size, file_modified=file_modified
             ):
-                return  # unchanged — hash/fingerprint/metadata can all be skipped
+                return "skipped"
 
         # Watch rescans every ~30s; don't stack duplicate hash jobs for the same track.
         if self._job_queue.has_active_for_track(JobType.HASH_FILE, job.library_id, track_id):
-            return
+            return "skipped"
 
         tech = _probe_audio_tech(path)
         track = _build_track(
@@ -117,12 +138,19 @@ class ScannerWorker:
         self._writer.submit(
             WriteDTO(table="tracks", operation="upsert", rows=[TrackRepository.to_row(track)])
         )
+        payload: dict[str, object] = {
+            "track_id": str(track_id),
+            "file_path": str(path),
+        }
+        if force:
+            payload["force"] = True
         self._job_queue.enqueue(
             JobType.HASH_FILE,
             job.library_id,
-            {"track_id": str(track_id), "file_path": str(path)},
+            payload,
             parent_job_id=job.id,
         )
+        return "queued"
 
 
 def _iter_audio_files(directory: Path) -> Iterator[Path]:

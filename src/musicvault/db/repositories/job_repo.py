@@ -99,6 +99,20 @@ class JobRepository:
                 update(jobs_table).where(jobs_table.c.id == uuid_to_blob(job_id)).values(**values)
             )
 
+    def merge_payload(self, job_id: UUID, extra: dict[str, object]) -> None:
+        """Shallow-merge ``extra`` into the job's JSON payload."""
+        job = self.get(job_id)
+        if job is None:
+            return
+        merged = dict(job.payload)
+        merged.update(extra)
+        with self._engine.begin() as conn:
+            conn.execute(
+                update(jobs_table)
+                .where(jobs_table.c.id == uuid_to_blob(job_id))
+                .values(payload=json.dumps(merged))
+            )
+
     def claim_pending(self, job_type: JobType, *, limit: int, now: datetime) -> list[Job]:
         """Atomically transition up to ``limit`` oldest, highest-priority
         `pending` jobs of `job_type` to `running` and return them.

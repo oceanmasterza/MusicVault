@@ -7,12 +7,10 @@ nothing is enqueued downstream. Missing / low-resolution covers park
 track still needs identity review (or confidence is below threshold);
 confident tracks try network + embedded lookup silently.
 
-Selection policy (no algorithm is documented — this is the
-implementation's fill-in): providers are asked in priority order
-(Cover Art Archive 10 > Embedded 50) and the first result meeting the
-configured minimum resolution wins. If nothing meets the bar, the
-largest-area candidate is still stored — a small cover beats no cover —
-and an ``artwork_low_res`` item may be parked so the user can upgrade it.
+Selection policy: embedded art is tried first (local). If it meets the
+configured minimum resolution, network providers are skipped. Otherwise
+Cover Art Archive (and any other network providers) run next. Album mates
+reuse an already-fetched album cover without another download.
 
 Storage: image bytes are written once to the application cache
 directory (``cache/artwork/<hash[:2]>/<hash>.<ext>``, deduplicated by
@@ -91,6 +89,17 @@ class ArtworkWorker:
             return
 
         now = datetime.now(UTC)
+
+        # Fast path: album (or track) already has cover — link and skip network.
+        if self._reuse_existing_cover(track) is not None:
+            summary = f"Reused album cover for '{track.file_name}'"
+            self._job_queue.mark_completed(
+                job.id,
+                summary=summary,
+                result={"outcome": "saved", "summary": summary, "reused": True},
+            )
+            return
+
         query = self._build_query(track)
         chosen, saw_embedded = self._pick_result(query)
 
@@ -108,12 +117,18 @@ class ArtworkWorker:
                     description="No provider returned a cover image for this track.",
                     now=now,
                 )
-            self._job_queue.mark_completed(job.id)
+            summary = f"No artwork for '{track.file_name}'"
+            self._job_queue.mark_completed(
+                job.id,
+                summary=summary,
+                result={"outcome": "missing", "summary": summary},
+            )
             return
 
         self._store_and_link(track, chosen, now)
 
-        if not self._meets_minimum(chosen) and _should_park_artwork_review(track):
+        low_res = not self._meets_minimum(chosen)
+        if low_res and _should_park_artwork_review(track):
             self._park_review(
                 job.library_id,
                 track,
@@ -126,7 +141,35 @@ class ArtworkWorker:
                 ),
                 now=now,
             )
-        self._job_queue.mark_completed(job.id)
+        outcome = "low_res" if low_res else "saved"
+        summary = (
+            f"{'Low-res cover' if low_res else 'Cover saved'} "
+            f"({chosen.source}, {chosen.width}x{chosen.height}) for '{track.file_name}'"
+        )
+        self._job_queue.mark_completed(
+            job.id,
+            summary=summary,
+            result={
+                "outcome": outcome,
+                "summary": summary,
+                "source": chosen.source,
+                "width": chosen.width,
+                "height": chosen.height,
+            },
+        )
+
+    def _reuse_existing_cover(self, track: Track) -> UUID | None:
+        """Link an already-fetched album/track cover without network I/O."""
+        if self._artwork.has_artwork_for_track(track.id):
+            existing = self._artwork.get_primary_for_track(track.id)
+            return existing.id if existing is not None else None
+        if track.album_id is None:
+            return None
+        album_art = self._artwork.get_primary_for_album(track.album_id)
+        if album_art is None:
+            return None
+        self._artwork.link_track(track.id, album_art.id)
+        return album_art.id
 
     def _build_query(self, track: Track) -> ArtworkQuery:
         mb_release_id: str | None = None
@@ -165,26 +208,36 @@ class ArtworkWorker:
     def _pick_result(self, query: ArtworkQuery) -> tuple[ArtworkResult | None, bool]:
         """Return ``(chosen result, embedded art was seen)``.
 
-        Every provider is asked (the embedded probe is a cheap local
-        read and is needed to keep ``has_embedded_art`` accurate even
-        when a network provider wins). The first priority-ordered result
-        meeting the minimum resolution is chosen; otherwise the
-        largest-area candidate is kept.
+        Embedded art is probed first (local, free). If it meets the
+        configured minimum resolution we skip network providers entirely.
+        Otherwise network providers run in priority order; the first
+        result meeting the minimum wins, else the largest candidate.
         """
         candidates: list[ArtworkResult] = []
         saw_embedded = False
-        for provider in self._providers:
+
+        embedded_providers = [p for p in self._providers if p.provider_id == "embedded_art"]
+        network_providers = [p for p in self._providers if p.provider_id != "embedded_art"]
+
+        for provider in embedded_providers:
             result = provider.fetch(query)
             if result is None:
                 continue
-            if result.source == "embedded_art":
-                saw_embedded = True
+            saw_embedded = True
             candidates.append(result)
-        if not candidates:
-            return None, saw_embedded
-        for result in candidates:
             if self._meets_minimum(result):
                 return result, saw_embedded
+
+        for provider in network_providers:
+            result = provider.fetch(query)
+            if result is None:
+                continue
+            candidates.append(result)
+            if self._meets_minimum(result):
+                return result, saw_embedded
+
+        if not candidates:
+            return None, saw_embedded
         best = max(candidates, key=lambda result: result.width * result.height)
         return best, saw_embedded
 

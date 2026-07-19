@@ -114,18 +114,38 @@ class DashboardPage(QWidget):
         self._btn_jobs = QPushButton("Open Jobs")
         self._btn_library = QPushButton("Open Library")
         self._btn_scan = QPushButton("Scan Incoming")
-        for btn in (self._btn_jobs, self._btn_library, self._btn_scan):
+        self._btn_force_scan = QPushButton("Force rescan")
+        for btn in (self._btn_jobs, self._btn_library, self._btn_scan, self._btn_force_scan):
             btn.setProperty("secondary", True)
+        self._btn_scan.setToolTip(
+            "Scan Incoming and only process new or changed files (size/mtime)."
+        )
+        self._btn_force_scan.setToolTip(
+            "Re-queue every audio file in Incoming through hash → identify → artwork, "
+            "even if it was already scanned."
+        )
         self._btn_review.clicked.connect(lambda: self.navigate_requested.emit("review"))
         self._btn_jobs.clicked.connect(lambda: self.navigate_requested.emit("jobs"))
         self._btn_library.clicked.connect(lambda: self.navigate_requested.emit("library"))
         self._btn_scan.clicked.connect(lambda: self.navigate_requested.emit("scan"))
+        self._btn_force_scan.clicked.connect(lambda: self.navigate_requested.emit("force_scan"))
         actions.addWidget(self._btn_review)
         actions.addWidget(self._btn_jobs)
         actions.addWidget(self._btn_library)
         actions.addWidget(self._btn_scan)
+        actions.addWidget(self._btn_force_scan)
         actions.addStretch(1)
         layout.addLayout(actions)
+
+        self._last_scan = QLabel("")
+        self._last_scan.setWordWrap(True)
+        self._last_scan.setProperty("muted", True)
+        layout.addWidget(self._last_scan)
+
+        self._processing_report = QLabel("")
+        self._processing_report.setWordWrap(True)
+        self._processing_report.setProperty("muted", True)
+        layout.addWidget(self._processing_report)
 
         # Pipeline
         pipe_box = QFrame()
@@ -307,10 +327,14 @@ class DashboardPage(QWidget):
             self._failed_table.setRowCount(0)
             self._review_detail.setText("Select or create a library in Settings.")
             self._failure_summary.setText("No failed jobs.")
+            self._last_scan.setText("")
+            self._processing_report.setText("")
             return
 
         self._heading.setText(f"Dashboard — {snap.library_name}")
         self._insight.setText(snap.insight)
+        self._last_scan.setText(snap.last_scan_summary)
+        self._processing_report.setText(snap.processing_report)
         self._kpi_tracks.set_value(str(snap.track_count))
         self._kpi_pending.set_value(str(snap.pending_jobs))
         self._kpi_running.set_value(str(snap.running_jobs))

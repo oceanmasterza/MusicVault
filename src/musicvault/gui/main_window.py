@@ -25,6 +25,9 @@ from musicvault import __version__
 from musicvault.core.container import Container
 from musicvault.gui.bridge.qt_event_bridge import QtEventBridge
 from musicvault.gui.theme import apply_theme
+from musicvault.gui.views.albums_page import AlbumsPage
+from musicvault.gui.views.artwork_page import ArtworkPage
+from musicvault.gui.views.artists_page import ArtistsPage
 from musicvault.gui.views.dashboard_page import DashboardPage
 from musicvault.gui.views.duplicates_page import DuplicatesPage
 from musicvault.gui.views.jobs_page import JobsPage
@@ -101,6 +104,10 @@ class MainWindow(QMainWindow):
         self._dashboard_page.navigate_requested.connect(self._on_dashboard_navigate)
         self._review_page = ReviewPage(container)
         self._library_page = LibraryPage(container)
+        self._artists_page = ArtistsPage(container)
+        self._artists_page.navigate_to_albums.connect(self._on_artists_to_albums)
+        self._albums_page = AlbumsPage(container)
+        self._artwork_page = ArtworkPage(container)
         self._jobs_page = JobsPage(container)
         self._duplicates_page = DuplicatesPage(container)
         self._rules_page = RulesPage(container)
@@ -114,24 +121,27 @@ class MainWindow(QMainWindow):
             "dashboard": self._dashboard_page,
             "library": self._library_page,
             "review": self._review_page,
-            "artists": StubPage("Artists", "Artist browser deferred past the Phase 14 MVP."),
-            "albums": StubPage("Albums", "Album grid deferred past the Phase 14 MVP."),
+            "artists": self._artists_page,
+            "albums": self._albums_page,
             "duplicates": self._duplicates_page,
             "jobs": self._jobs_page,
-            "artwork": StubPage(
-                "Artwork",
-                "Artwork browser UI is deferred. Cover fetch still runs in the pipeline "
-                "(embedded art + Cover Art Archive once a MusicBrainz release/recording "
-                "ID is known). Check Jobs for fetch_artwork, and Review for missing covers.",
-            ),
+            "artwork": self._artwork_page,
             "reports": StubPage(
                 "Reports",
-                "Report generation is available via generate_report jobs; GUI viewer deferred.",
+                "Report viewer UI is deferred. Library summary reports can still be "
+                "generated as generate_report jobs; files land under the app reports folder "
+                "(Open data folder in Settings).",
             ),
             "rules": self._rules_page,
             "logs": self._logs_page,
             "settings": self._settings_page,
-            "plugins": StubPage("Plugins", "Plugin manager UI deferred."),
+            "plugins": StubPage(
+                "Plugins",
+                "Plugin manager UI is next on the polish list. Built-in providers "
+                "already run from Settings and the pipeline: local tags, filename "
+                "parser, MusicBrainz, AcoustID, Cover Art Archive, and media servers "
+                "(Navidrome, Jellyfin, Plex, Subsonic).",
+            ),
         }
 
         self._nav_keys: list[str] = []
@@ -164,9 +174,17 @@ class MainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu("&File")
         scan = QAction("Scan &Incoming", self)
         scan.setShortcut(QKeySequence("Ctrl+Shift+S"))
-        scan.setToolTip("Enqueue a scan of the active library’s Incoming folder.")
-        scan.triggered.connect(self._scan_incoming)
+        scan.setToolTip(
+            "Scan Incoming and only process new or changed files (size/mtime)."
+        )
+        scan.triggered.connect(lambda: self._scan_incoming(force=False))
         file_menu.addAction(scan)
+        force_scan = QAction("Force &Rescan Incoming", self)
+        force_scan.setToolTip(
+            "Re-queue every audio file in Incoming, even if already scanned."
+        )
+        force_scan.triggered.connect(lambda: self._scan_incoming(force=True))
+        file_menu.addAction(force_scan)
         file_menu.addSeparator()
         open_incoming = QAction("Open Incoming Folder", self)
         open_incoming.triggered.connect(self._open_incoming)
@@ -221,9 +239,44 @@ class MainWindow(QMainWindow):
 
     def _on_dashboard_navigate(self, key: str) -> None:
         if key == "scan":
-            self._scan_incoming()
+            self._scan_incoming(force=False)
+            return
+        if key == "force_scan":
+            self._scan_incoming(force=True)
             return
         self._go_to(key)
+
+    def _scan_incoming(self, *, force: bool = False) -> None:
+        library = self._current_library()
+        if library is None:
+            QMessageBox.warning(self, "MusicVault", "Create or select a library in Settings first.")
+            self._go_to("settings")
+            return
+        stats = self._container.job_queue.get_stats(library.id)
+        if stats.by_type.get(JobType.SCAN_DIRECTORY.value, 0) > 0:
+            QMessageBox.information(self, "MusicVault", "A scan is already queued.")
+            self._go_to("jobs")
+            return
+        payload: dict[str, object] = {
+            "directory": library.incoming_path,
+            "zone": LibraryZone.INCOMING.value,
+        }
+        if force:
+            payload["force"] = True
+        self._container.job_queue.enqueue(
+            JobType.SCAN_DIRECTORY,
+            library.id,
+            payload,
+        )
+        self._go_to("jobs")
+        self._jobs_page.refresh()
+        label = "Force rescan" if force else "Scan"
+        self.statusBar().showMessage(f"{label} queued: {library.incoming_path}", 5000)
+
+    def _on_artists_to_albums(self, artist_id: object) -> None:
+        aid = artist_id if isinstance(artist_id, UUID) else None
+        self._albums_page.set_artist_filter(aid)
+        self._go_to("albums")
 
     def _go_to(self, key: str) -> None:
         if key not in self._nav_keys:
@@ -239,29 +292,6 @@ class MainWindow(QMainWindow):
             return None
         return self._container.library_repo.get(self._library_id)
 
-    def _scan_incoming(self) -> None:
-        library = self._current_library()
-        if library is None:
-            QMessageBox.warning(self, "MusicVault", "Create or select a library in Settings first.")
-            self._go_to("settings")
-            return
-        stats = self._container.job_queue.get_stats(library.id)
-        if stats.by_type.get(JobType.SCAN_DIRECTORY.value, 0) > 0:
-            QMessageBox.information(self, "MusicVault", "A scan is already queued.")
-            self._go_to("jobs")
-            return
-        self._container.job_queue.enqueue(
-            JobType.SCAN_DIRECTORY,
-            library.id,
-            {
-                "directory": library.incoming_path,
-                "zone": LibraryZone.INCOMING.value,
-            },
-        )
-        self._go_to("jobs")
-        self._jobs_page.refresh()
-        self.statusBar().showMessage(f"Scan queued: {library.incoming_path}", 5000)
-
     def _open_incoming(self) -> None:
         library = self._current_library()
         if library is None:
@@ -274,8 +304,12 @@ class MainWindow(QMainWindow):
             self,
             "About MusicVault",
             f"<h3>MusicVault {__version__}</h3>"
+            "<p>Lightroom for music — scan Incoming, identify, review, "
+            "organize to Library, fetch artwork, sync media servers.</p>"
             f"<p>Data folder:<br><code>{self._container.paths.root}</code></p>"
-            f"<p>Logs:<br><code>{self._container.paths.logs_dir}</code></p>",
+            f"<p>Logs:<br><code>{self._container.paths.logs_dir}</code></p>"
+            "<p>Source: <a href='https://github.com/oceanmasterza/MusicVault'>"
+            "github.com/oceanmasterza/MusicVault</a></p>",
         )
 
     def _uninstall(self) -> None:
@@ -348,6 +382,12 @@ class MainWindow(QMainWindow):
             self._jobs_page.refresh()
         elif key == "library":
             self._library_page.refresh()
+        elif key == "artists":
+            self._artists_page.refresh()
+        elif key == "albums":
+            self._albums_page.refresh()
+        elif key == "artwork":
+            self._artwork_page.refresh()
         elif key == "duplicates":
             self._duplicates_page.refresh()
         elif key == "rules":
@@ -363,6 +403,9 @@ class MainWindow(QMainWindow):
         for page in (
             self._dashboard_page,
             self._library_page,
+            self._artists_page,
+            self._albums_page,
+            self._artwork_page,
             self._review_page,
             self._jobs_page,
             self._duplicates_page,

@@ -12,13 +12,15 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Engine, Row, select
+from sqlalchemy import Engine, Row, func, or_, select
 
 from musicvault.db.repositories.base import batch_upsert
-from musicvault.db.tables import album_artwork, track_artwork
+from musicvault.db.tables import album_artwork, albums, artists, track_artwork
 from musicvault.db.tables import artwork as artwork_table
+from musicvault.db.tables import tracks as tracks_table
 from musicvault.db.uuid_utils import blob_to_uuid, uuid_to_blob
 from musicvault.models.entities.artwork import Artwork, ArtworkRole
+from musicvault.services.dto.browse_dto import ArtworkBrowseRow
 
 
 class ArtworkRepository:
@@ -113,6 +115,86 @@ class ArtworkRepository:
         )
         with self._engine.connect() as conn:
             return conn.execute(statement).first() is not None
+
+    def list_browse_for_library(
+        self,
+        library_id: UUID,
+        *,
+        missing_only: bool = False,
+        query: str | None = None,
+        limit: int = 500,
+        min_width: int = 500,
+        min_height: int = 500,
+        offset: int = 0,
+    ) -> list[ArtworkBrowseRow]:
+        """Album-centric artwork status for tracks in this library."""
+        lib = uuid_to_blob(library_id)
+        track_count = func.count(tracks_table.c.id).label("track_count")
+        statement = (
+            select(
+                albums.c.id.label("album_id"),
+                albums.c.title,
+                artists.c.name.label("artist_name"),
+                track_count,
+                artwork_table.c.source,
+                artwork_table.c.width,
+                artwork_table.c.height,
+            )
+            .select_from(tracks_table)
+            .join(albums, albums.c.id == tracks_table.c.album_id)
+            .outerjoin(artists, artists.c.id == albums.c.album_artist_id)
+            .outerjoin(album_artwork, album_artwork.c.album_id == albums.c.id)
+            .outerjoin(artwork_table, artwork_table.c.id == album_artwork.c.artwork_id)
+            .where(tracks_table.c.library_id == lib)
+            .group_by(
+                albums.c.id,
+                albums.c.title,
+                artists.c.name,
+                artwork_table.c.source,
+                artwork_table.c.width,
+                artwork_table.c.height,
+            )
+            .order_by(artists.c.name, albums.c.title)
+            .offset(offset)
+            .limit(limit)
+        )
+        if query:
+            like = f"%{query}%"
+            statement = statement.where(
+                or_(albums.c.title.ilike(like), artists.c.name.ilike(like))
+            )
+        with self._engine.connect() as conn:
+            rows = conn.execute(statement).all()
+
+        results: list[ArtworkBrowseRow] = []
+        for row in rows:
+            width = int(row.width) if row.width is not None else None
+            height = int(row.height) if row.height is not None else None
+            has_cover = width is not None
+            if has_cover and width is not None and height is not None:
+                if width < min_width or height < min_height:
+                    status = "low_res"
+                else:
+                    status = "ok"
+            else:
+                status = "missing"
+            if missing_only and status == "ok":
+                continue
+            results.append(
+                ArtworkBrowseRow(
+                    album_id=blob_to_uuid(row.album_id),
+                    track_id=None,
+                    label=row.title,
+                    artist_name=row.artist_name,
+                    track_count=int(row.track_count),
+                    has_cover=has_cover,
+                    cover_source=row.source,
+                    width=width,
+                    height=height,
+                    status=status,
+                )
+            )
+        return results
 
 
 def _to_row(artwork: Artwork) -> dict[str, object]:

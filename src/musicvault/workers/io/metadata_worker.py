@@ -18,6 +18,7 @@ from uuid import UUID
 
 from musicvault.db.repositories.album_repo import AlbumRepository
 from musicvault.db.repositories.artist_repo import ArtistRepository
+from musicvault.db.repositories.artwork_repo import ArtworkRepository
 from musicvault.db.repositories.file_identity_repo import FileIdentityRepository
 from musicvault.db.repositories.metadata_confidence_repo import MetadataConfidenceRepository
 from musicvault.db.repositories.track_repo import TrackRepository
@@ -47,6 +48,7 @@ class MetadataWorker:
         *,
         artist_repo: ArtistRepository | None = None,
         album_repo: AlbumRepository | None = None,
+        artwork_repo: ArtworkRepository | None = None,
         folder_trust: FolderTrustService | None = None,
         fingerprint_mode: str = "all",
     ) -> None:
@@ -58,6 +60,7 @@ class MetadataWorker:
         self._reviews = review_queue
         self._artists = artist_repo
         self._albums = album_repo
+        self._artwork = artwork_repo
         self._folder_trust = folder_trust
         self._fingerprint_mode = fingerprint_mode
 
@@ -124,14 +127,53 @@ class MetadataWorker:
             parent_job_id=job.id,
             now=now,
         )
-        self._job_queue.enqueue(
-            JobType.FETCH_ARTWORK,
-            job.library_id,
-            {"track_id": str(track_id)},
-            parent_job_id=job.id,
-            now=now,
+        if not self._album_already_has_cover(updated):
+            self._job_queue.enqueue(
+                JobType.FETCH_ARTWORK,
+                job.library_id,
+                {"track_id": str(track_id)},
+                parent_job_id=job.id,
+                now=now,
+            )
+        summary = _identify_summary(updated, result.fields, result.overall_confidence, result.needs_review)
+        self._job_queue.mark_completed(
+            job.id,
+            summary=summary,
+            result={
+                "outcome": "needs_review" if result.needs_review else "matched",
+                "summary": summary,
+                "confidence": result.overall_confidence,
+                "needs_review": result.needs_review,
+                "artist_id": str(updated.artist_id) if updated.artist_id else None,
+                "album_id": str(updated.album_id) if updated.album_id else None,
+            },
         )
-        self._job_queue.mark_completed(job.id)
+
+    def _album_already_has_cover(self, track: Track) -> bool:
+        """Skip enqueueing artwork when the album cover was already fetched."""
+        if self._artwork is None or track.album_id is None:
+            return False
+        return self._artwork.get_primary_for_album(track.album_id) is not None
+
+
+def _identify_summary(
+    track: Track,
+    fields: dict[str, FieldConfidence],
+    confidence: float,
+    needs_review: bool,
+) -> str:
+    title = _winner_str(fields, "title") or track.title or track.file_name
+    artist = _winner_str(fields, "artist")
+    album = _winner_str(fields, "album")
+    if artist and album:
+        summary = f"Identified: {artist} — {album} / {title} ({confidence:.0%})"
+    elif artist:
+        summary = f"Identified: {artist} / {title} ({confidence:.0%})"
+    else:
+        summary = f"Identified: {title} ({confidence:.0%})"
+    if needs_review:
+        summary += " — needs review"
+    return summary
 
 
 def _fingerprint_from_identity(identity: FileIdentity | None) -> FingerprintData | None:

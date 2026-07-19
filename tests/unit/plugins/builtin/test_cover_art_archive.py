@@ -140,3 +140,26 @@ def test_fetch_by_artist_and_album_searches_musicbrainz_then_caa() -> None:
     assert result is not None
     assert result.confidence == 0.75
     assert result.source_id == _RELEASE_MBID
+
+
+@responses.activate
+def test_artist_album_search_is_cached_across_fetches() -> None:
+    responses.add(
+        responses.GET,
+        "https://musicbrainz.org/ws/2/release/",
+        json={"releases": [{"id": _RELEASE_MBID, "title": "OK Computer", "score": 100}]},
+    )
+    responses.add(
+        responses.GET,
+        f"https://coverartarchive.org/release/{_RELEASE_MBID}/front",
+        body=_png(),
+        content_type="image/jpeg",
+    )
+    provider = CoverArtArchiveProvider()
+    query = ArtworkQuery(artist="Radiohead", album="OK Computer")
+
+    assert provider.fetch(query) is not None
+    assert provider.fetch(query) is not None
+
+    mb_calls = [call for call in responses.calls if "musicbrainz.org" in call.request.url]
+    assert len(mb_calls) == 1

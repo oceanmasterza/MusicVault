@@ -220,7 +220,7 @@ def test_low_res_artwork_is_stored_but_flagged_for_review(
     assert "200x200" in pending[0].description
 
 
-def test_higher_priority_provider_wins_when_it_meets_the_minimum(
+def test_good_embedded_art_skips_network_provider(
     track_repo: TrackRepository,
     album_repo: AlbumRepository,
     artwork_repo: ArtworkRepository,
@@ -231,8 +231,35 @@ def test_higher_priority_provider_wins_when_it_meets_the_minimum(
     track_id: UUID,
     artwork_dir: Path,
 ) -> None:
-    caa = _StubProvider("cover_art_archive", 10, _result("cover_art_archive", 600, 600))
-    embedded = _StubProvider("embedded_art", 50, _result("embedded_art", 2000, 2000))
+    caa = _StubProvider("cover_art_archive", 10, _result("cover_art_archive", 1200, 1200))
+    embedded = _StubProvider("embedded_art", 50, _result("embedded_art", 800, 800))
+    worker = _make_worker(
+        track_repo, album_repo, artwork_repo, [caa, embedded], review_queue, job_queue, artwork_dir
+    )
+    job = _running_job(job_queue, job_repo, library_id, track_id)
+
+    worker.execute(job)
+
+    stored = artwork_repo.get_primary_for_track(track_id)
+    assert stored is not None
+    assert stored.source == "embedded_art"
+    assert caa.calls == 0
+    assert embedded.calls == 1
+
+
+def test_network_used_when_embedded_is_below_minimum(
+    track_repo: TrackRepository,
+    album_repo: AlbumRepository,
+    artwork_repo: ArtworkRepository,
+    review_queue: ReviewQueueService,
+    job_queue: JobQueueService,
+    job_repo: JobRepository,
+    library_id: UUID,
+    track_id: UUID,
+    artwork_dir: Path,
+) -> None:
+    caa = _StubProvider("cover_art_archive", 10, _result("cover_art_archive", 900, 900))
+    embedded = _StubProvider("embedded_art", 50, _result("embedded_art", 300, 300))
     worker = _make_worker(
         track_repo, album_repo, artwork_repo, [caa, embedded], review_queue, job_queue, artwork_dir
     )
@@ -243,6 +270,8 @@ def test_higher_priority_provider_wins_when_it_meets_the_minimum(
     stored = artwork_repo.get_primary_for_track(track_id)
     assert stored is not None
     assert stored.source == "cover_art_archive"
+    assert caa.calls == 1
+    assert embedded.calls == 1
 
 
 def test_largest_candidate_wins_when_none_meet_the_minimum(

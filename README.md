@@ -10,16 +10,19 @@
 
 MusicVault automates the complete lifecycle of a music library:
 
-- **Watch folder** — drop files in Incoming/, everything else is automatic
-- **Fingerprint** — Chromaprint + AcoustID identification regardless of filename
-- **Multi-provider metadata** — MusicBrainz, Discogs, local tags, ranked by confidence
-- **Review queue** — uncertain matches require human approval before entering the library
+- **Watch folder** — drop files in Incoming; hashing, identification, and artwork run in place
+- **Fingerprint** — Chromaprint + AcoustID identification (full or album-folder sampling)
+- **Multi-provider metadata** — MusicBrainz, AcoustID, local tags, filenames, ranked by confidence
+- **Review queue** — uncertain matches need approval before entering the canonical library
 - **Rules engine** — configurable IF/THEN automation (archive MP3 when FLAC exists, etc.)
-- **Staging library** — Incoming → Staging → Review → Library (mistakes are reversible)
-- **Detect duplicates** — visual side-by-side comparison with quality scores
-- **Organize & rename** — configurable folder structures, scene name cleaning
-- **Media server integration** — Navidrome, Jellyfin, Plex, Emby, Ampache, Koel, and more
-- **Rollback** — every operation is reversible
+- **Single move to Library** — originals stay in Incoming until confirmed, then one organize step
+- **Incoming cleanup** — leftover `.nfo` / covers / empty album folders are removed after the last audio file moves
+- **Detect duplicates** — album-aware matching; confident same-album dups can auto-resolve
+- **Organize & rename** — `Artist / Year - Album / track` under Library
+- **Artwork** — embedded covers preferred; Cover Art Archive when needed; album-level reuse
+- **Browse UI** — Library folder tree, Artists, Albums, Artwork status
+- **Media server integration** — Navidrome, Jellyfin, Plex, Subsonic rescan after library entry
+- **Rollback** — organize moves are reversible via operation snapshots
 
 Designed for power users with libraries of **100,000–1,000,000+ tracks**.
 
@@ -29,26 +32,27 @@ Collectors, audiophiles, and self-hosted media server operators using **Navidrom
 
 ## Status
 
-**Phase 16 — Packaging** (complete through 1.0.0)
+**1.0-capable — Phases 1–16 delivered**
 
-Architecture is finalized (v3). The full pipeline runs end-to-end:
-scan → hash → fingerprint → identify → rules → duplicates → organize →
-artwork / media-server sync, with review, rollback, and reports. Phase 14
-ships the Qt GUI shell and core pages; Phase 15 adds Navidrome / Jellyfin /
-Plex / Subsonic rescan plugins; Phase 16 adds PyInstaller + Inno Setup
-packaging with **bundled Chromaprint (`fpcalc`)** so installs are offline-
-complete. See [Architecture Documentation](docs/architecture/README.md)
+The full pipeline runs end-to-end:
+
+`scan → hash → fingerprint → identify → duplicates → rules → organize → artwork / media-server sync`
+
+with review, rollback, reports, Dashboard, and browse pages. Install with the
+Windows Setup (`packaging/output/MusicVault-Setup.exe`) — Chromaprint
+(`fpcalc`) is bundled. See [Architecture Documentation](docs/architecture/README.md)
 and [packaging/README.md](packaging/README.md).
 
 ```powershell
 git clone https://github.com/oceanmasterza/MusicVault.git
 cd MusicVault
 python -m venv .venv
-.venv\Scripts\activate
-pip install -e ".[dev]"
-pytest              # full suite
-python -m musicvault  # launches GUI
+.venv\Scripts\Activate.ps1
+pip install -e ".[dev,build]"
+pytest
+python -m musicvault          # GUI
 # CI / automation: python -m musicvault --headless
+.\packaging\build_windows.ps1 # rebuild Setup.exe
 ```
 
 ## Tech Stack
@@ -61,13 +65,12 @@ python -m musicvault  # launches GUI
 | Identities | **UUID v7** (all entities) |
 | Processing | **Persistent job queue** with independent workers |
 | Audio metadata | Mutagen |
-| Identification | MusicBrainz, Discogs, AcoustID, Chromaprint |
+| Identification | MusicBrainz, AcoustID, Chromaprint |
 | Fuzzy matching | RapidFuzz |
-| Media processing | FFmpeg |
 | Logging | Loguru |
 | Testing | pytest + mypy strict |
 | CI | GitHub Actions (ruff, black, mypy, pytest) |
-| Packaging | PyInstaller |
+| Packaging | PyInstaller + Setup.exe |
 
 ## Architecture Highlights (v3)
 
@@ -75,11 +78,11 @@ python -m musicvault  # launches GUI
 |----------|--------|-----|
 | Database access | SQLAlchemy Core | 3–5× faster than ORM at 1M+ rows |
 | Writes | Single-writer DB thread | Eliminates SQLite lock contention |
-| CPU-bound work | ProcessPool | Bypasses the GIL for hashing/fingerprinting |
+| CPU-bound work | ProcessPool (threads in frozen builds) | Hashing / fingerprinting |
 | Processing | Job queue + workers | Resumable, crash-safe, observable |
 | Metadata | Multi-provider arbitration | No single source of truth |
-| Uncertain data | Review queue (< 90% confidence) | Prevents metadata corruption |
-| File placement | Staging library | Mistakes don't touch canonical library |
+| Uncertain data | Review queue (configurable threshold) | Prevents metadata corruption |
+| File placement | In-place Incoming → one Library move | Mistakes don't touch the canonical tree early |
 | Automation | Rules engine + watch folder | Zero-click processing |
 | CI | From Phase 1 | No broken commits from day one |
 
@@ -87,36 +90,29 @@ python -m musicvault  # launches GUI
 
 | Document | Description |
 |----------|-------------|
-| **[Pipeline Engine v3](docs/architecture/12-pipeline-engine-v3.md)** | Latest — DB writer, ProcessPool, event bus |
+| **[Pipeline Engine v3](docs/architecture/12-pipeline-engine-v3.md)** | DB writer, ProcessPool, event bus |
 | [Revision v2](docs/architecture/10-revision-v2.md) | Job queue, UUID, review, staging |
 | [Overview](docs/architecture/01-overview.md) | Job pipeline, library zones |
 | [Folder Layout](docs/architecture/02-folder-layout.md) | `models/`, `core/`, `db/`, `services/`, `workers/` |
 | [Database Schema](docs/architecture/03-database-schema.md) | UUID schema, jobs, review queue |
 | [Service Layer](docs/architecture/04-service-layer.md) | Job queue, arbitrator, rules |
-| [Plugin API](docs/architecture/05-plugin-api.md) | 10 media servers |
-| [Roadmap](docs/architecture/07-roadmap.md) | 16-phase plan |
+| [Plugin API](docs/architecture/05-plugin-api.md) | Metadata, artwork, media servers |
+| [GUI Architecture](docs/architecture/06-gui-architecture.md) | Sidebar pages, Review UX |
+| [Roadmap](docs/architecture/07-roadmap.md) | 16-phase plan + post-MVP polish |
 | [CI Pipeline](docs/architecture/11-ci-pipeline.md) | GitHub Actions spec |
+| [Packaging](packaging/README.md) | Windows Setup build |
 
 ## Development Roadmap (Summary)
 
 | Phase | Milestone | Status |
 |-------|-----------|--------|
-| 0 | Architecture v1 | Complete |
-| 0b | Architecture v2 revision | Complete |
-| 1 | Scaffold + CI | Complete |
-| 2 | Database Layer | Complete |
-| 3 | Domain Models | Complete |
-| 4 | Job Dispatcher + Scanner/Hash Workers | Complete |
-| 5 | Fingerprint Worker | Complete |
-| 6 | Metadata Arbitrator + Providers | Complete |
-| 7 | Review Queue | Complete |
-| 8 | Rules Engine | Complete |
-| 9 | Duplicate Detection | Complete |
-| 10 | Organizer + Watch Folder | Complete |
-| 11 | Artwork Worker | Complete |
-| 12 | Rollback Engine | Complete |
-| **13** | **Reports** | **Current** |
-| 14–16 | GUI → Plugins → Installer | Planned |
+| 0–0b | Architecture v1 / v2 | Complete |
+| 1–12 | Scaffold → Rollback | Complete |
+| 13 | Reports | Complete |
+| 14 | GUI (Dashboard, Library tree, Artists/Albums/Artwork, Review, Jobs, …) | Complete |
+| 15 | Media server plugins | Complete |
+| 16 | Windows installer (bundled fpcalc) | Complete |
+| Next | Plugin manager UI, Discogs, deeper browse polish | Planned |
 
 ## License
 

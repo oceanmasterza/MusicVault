@@ -765,22 +765,25 @@ Phase 16  ██████████ Packaging + installer
 
 **Goal**: Full Qt6 interface including Review Queue, Job Monitor, Duplicate Viewer, Rules Editor.
 
-**Status**: Complete (MVP).
+**Status**: Complete (MVP + browse polish).
 
 **Delivered**:
 - Qt bootstrap (`gui/app.py`) + dark/light theme; `__main__` launches GUI
   (escape hatch: `--headless` / `MUSICVAULT_HEADLESS=1`)
 - `MainWindow` shell with sidebar nav, library selector, status bar, 2s poll
-- Core pages: Library (zone filter), Review (approve/reject/defer), Jobs
-  (cancel/retry), Duplicates + Rules (list), Settings (library CRUD,
-  preferences, media-server connection form)
+- **Dashboard** — KPIs, pipeline strip, Force rescan, last-scan + processing report
+- **Library** — zone filter, folder tree (Incoming/Staging/Library/Archive →
+  path segments), full-height track table, search
+- **Artists / Albums / Artwork** — DB-backed browse with track drill-down /
+  cover status
+- Review (approve/reject/defer), Jobs (cancel/retry + Details summaries),
+  Duplicates + Rules (list), Settings (library CRUD, fingerprint mode,
+  preferences, media-server form), Logs (open log folder)
 - `QtEventBridge` marshals `ReviewItemAddedEvent` onto the GUI thread
-- Stub pages for Dashboard / Artists / Albums / Artwork / Reports / Logs /
-  Plugins (deferred polish)
 - pytest-qt smoke tests; CI sets `QT_QPA_PLATFORM=offscreen`
 
-**Deferred**: visual rule builder, album/artist browsers, report viewer,
-full duplicate side-by-side compare, plugin manager UI.
+**Still deferred**: visual rule builder, in-app report viewer, full duplicate
+side-by-side compare, **plugin manager UI**, album art thumbnail gallery.
 
 ---
 

@@ -65,6 +65,8 @@ class DashboardSnapshot:
     failed_job_rows: tuple[Job, ...] = ()
     top_failures: tuple[tuple[str, str, int], ...] = ()
     insight: str = ""
+    last_scan_summary: str = ""
+    processing_report: str = ""
 
 
 def build_dashboard_snapshot(
@@ -85,6 +87,8 @@ def build_dashboard_snapshot(
     review_total = container.review_queue.count_pending(library_id)
     review_by_type = container.review_repo.count_pending_by_type(library_id)
     open_dups = len(container.duplicate_repo.list_open_by_library(library_id))
+    last_scan_summary = _latest_scan_summary(container, library_id)
+    processing_report = _processing_report(container, library_id, summary)
 
     # Running counts per type for the flow (subset of backlog).
     running_by_type = container.job_repo.count_by_type(
@@ -172,7 +176,121 @@ def build_dashboard_snapshot(
         failed_job_rows=failed_jobs,
         top_failures=top_failures,
         insight=insight,
+        last_scan_summary=last_scan_summary,
+        processing_report=processing_report,
     )
+
+
+def _latest_scan_summary(container: Container, library_id: UUID) -> str:
+    """Most recent completed scan_directory result line, if any."""
+    completed = container.job_repo.list_by_status(
+        JobStatus.COMPLETED, library_id=library_id, limit=80
+    )
+    for job in completed:
+        if job.job_type is not JobType.SCAN_DIRECTORY:
+            continue
+        summary = job.error_message or job.payload.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            when = job.completed_at.isoformat(timespec="minutes") if job.completed_at else ""
+            return f"Last scan{f' ({when})' if when else ''}: {summary}"
+    return (
+        "Last scan: none yet. Scan Incoming processes only new/changed files; "
+        "use Force rescan to re-process everything."
+    )
+
+
+def _processing_report(
+    container: Container, library_id: UUID, summary: dict[str, object]
+) -> str:
+    """Few-line digest of identify / artwork / organize outcomes since last scan."""
+    completed = container.job_repo.list_by_status(
+        JobStatus.COMPLETED, library_id=library_id, limit=400
+    )
+    since = None
+    for job in completed:
+        if job.job_type is JobType.SCAN_DIRECTORY and job.completed_at is not None:
+            since = job.completed_at
+            break
+
+    identify_ok = identify_review = 0
+    art_saved = art_missing = art_low = 0
+    organized_library = organized_other = 0
+    wave_jobs = 0
+
+    for job in completed:
+        if job.job_type is JobType.SCAN_DIRECTORY:
+            continue
+        if since is not None and (job.completed_at is None or job.completed_at < since):
+            continue
+        wave_jobs += 1
+        outcome = job.payload.get("outcome")
+        note = job.error_message if isinstance(job.error_message, str) else ""
+
+        if job.job_type is JobType.IDENTIFY_METADATA:
+            if outcome == "needs_review" or job.payload.get("needs_review") is True:
+                identify_review += 1
+            else:
+                identify_ok += 1
+        elif job.job_type is JobType.FETCH_ARTWORK:
+            if outcome == "missing" or note.startswith("No artwork"):
+                art_missing += 1
+            elif outcome == "low_res" or note.startswith("Low-res"):
+                art_low += 1
+            elif outcome == "saved" or note.startswith("Cover saved"):
+                art_saved += 1
+        elif job.job_type is JobType.ORGANIZE_FILE:
+            target = job.payload.get("target_zone")
+            if target == LibraryZone.LIBRARY.value or "→ library" in note.lower() or (
+                "library" in note.lower() and "Moved to" in note
+            ):
+                organized_library += 1
+            else:
+                organized_other += 1
+
+    failed_identify = failed_art = 0
+    for job in container.job_repo.list_by_status(
+        JobStatus.FAILED, library_id=library_id, limit=100
+    ):
+        if since is not None and job.completed_at is not None and job.completed_at < since:
+            continue
+        if job.job_type is JobType.IDENTIFY_METADATA:
+            failed_identify += 1
+        elif job.job_type is JobType.FETCH_ARTWORK:
+            failed_art += 1
+
+    if wave_jobs == 0 and since is None:
+        lines = [
+            "Processing report:",
+            "No completed pipeline jobs yet — run Scan Incoming.",
+        ]
+    else:
+        lines = ["Processing report (since last scan):"]
+        if identify_ok or identify_review or failed_identify:
+            line = f"• Identify: {identify_ok} matched, {identify_review} need review"
+            if failed_identify:
+                line += f", {failed_identify} failed"
+            lines.append(line)
+        if art_saved or art_missing or art_low or failed_art:
+            line = f"• Artwork: {art_saved} saved, {art_low} low-res, {art_missing} missing"
+            if failed_art:
+                line += f", {failed_art} failed"
+            lines.append(line)
+        if organized_library or organized_other:
+            line = f"• Organized: {organized_library} → Library"
+            if organized_other:
+                line += f", {organized_other} other moves"
+            lines.append(line)
+        if len(lines) == 1:
+            lines.append("• Pipeline jobs from this wave have not finished reporting yet.")
+
+    lines.append(
+        "• Catalog: "
+        f"{int(summary.get('track_count', 0))} tracks · "
+        f"{int(summary.get('artists_linked', 0))} artists · "
+        f"{int(summary.get('albums_linked', 0))} albums · "
+        f"{int(summary.get('tracks_with_cover', 0))} with cover"
+    )
+    return "\n".join(lines)
 
 
 def _insight(

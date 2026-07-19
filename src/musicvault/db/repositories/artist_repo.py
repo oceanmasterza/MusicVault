@@ -7,12 +7,14 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Engine, Row, select
+from sqlalchemy import Engine, Row, func, select
 
 from musicvault.db.repositories.base import batch_upsert
 from musicvault.db.tables import artists as artists_table
+from musicvault.db.tables import tracks as tracks_table
 from musicvault.db.uuid_utils import blob_to_uuid, uuid_to_blob
 from musicvault.models.entities.artist import Artist
+from musicvault.services.dto.browse_dto import ArtistBrowseRow
 
 
 class ArtistRepository:
@@ -50,6 +52,56 @@ class ArtistRepository:
         with self._engine.connect() as conn:
             rows = conn.execute(select(artists_table).where(artists_table.c.name == name)).all()
         return [_from_row(row) for row in rows]
+
+    def list_for_library(
+        self,
+        library_id: UUID,
+        *,
+        query: str | None = None,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> list[ArtistBrowseRow]:
+        """Artists linked to at least one track in this library, with counts."""
+        lib = uuid_to_blob(library_id)
+        track_count = func.count(tracks_table.c.id).label("track_count")
+        album_count = func.count(func.distinct(tracks_table.c.album_id)).label("album_count")
+        statement = (
+            select(
+                artists_table.c.id,
+                artists_table.c.name,
+                artists_table.c.sort_name,
+                artists_table.c.mbid,
+                track_count,
+                album_count,
+            )
+            .join(tracks_table, tracks_table.c.artist_id == artists_table.c.id)
+            .where(tracks_table.c.library_id == lib)
+            .group_by(
+                artists_table.c.id,
+                artists_table.c.name,
+                artists_table.c.sort_name,
+                artists_table.c.mbid,
+            )
+            .order_by(artists_table.c.sort_name, artists_table.c.name)
+            .offset(offset)
+            .limit(limit)
+        )
+        if query:
+            like = f"%{query}%"
+            statement = statement.where(artists_table.c.name.ilike(like))
+        with self._engine.connect() as conn:
+            rows = conn.execute(statement).all()
+        return [
+            ArtistBrowseRow(
+                artist_id=blob_to_uuid(row.id),
+                name=row.name,
+                sort_name=row.sort_name,
+                track_count=int(row.track_count),
+                album_count=int(row.album_count),
+                mbid=row.mbid,
+            )
+            for row in rows
+        ]
 
 
 def _to_row(artist: Artist) -> dict[str, object]:

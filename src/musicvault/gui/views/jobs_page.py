@@ -36,7 +36,7 @@ class JobsPage(QWidget):
         layout.addWidget(self._stats)
 
         self._table = QTableWidget(0, 5)
-        self._table.setHorizontalHeaderLabels(["Type", "Status", "Attempts", "Error", "Created"])
+        self._table.setHorizontalHeaderLabels(["Type", "Status", "Attempts", "Details", "Created"])
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.horizontalHeader().setStretchLastSection(True)

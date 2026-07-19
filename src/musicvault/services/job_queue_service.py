@@ -85,8 +85,22 @@ class JobQueueService:
     def mark_running(self, job_id: UUID, *, now: datetime | None = None) -> None:
         self._jobs.update_status(job_id, JobStatus.RUNNING, started_at=_resolve_now(now))
 
-    def mark_completed(self, job_id: UUID, *, now: datetime | None = None) -> None:
-        self._jobs.update_status(job_id, JobStatus.COMPLETED, completed_at=_resolve_now(now))
+    def mark_completed(
+        self,
+        job_id: UUID,
+        *,
+        now: datetime | None = None,
+        summary: str | None = None,
+        result: dict[str, Any] | None = None,
+    ) -> None:
+        if result:
+            self._jobs.merge_payload(job_id, result)
+        self._jobs.update_status(
+            job_id,
+            JobStatus.COMPLETED,
+            completed_at=_resolve_now(now),
+            error_message=summary,
+        )
 
     def has_active_for_track(
         self,
