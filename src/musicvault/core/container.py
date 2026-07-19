@@ -44,11 +44,16 @@ from musicvault.models.services.duplicate_matcher import DuplicateMatcher
 from musicvault.models.services.organize_engine import OrganizeEngine
 from musicvault.models.services.quality_scorer import DEFAULT_WEIGHTS, QualityScorer
 from musicvault.plugins.builtin.acoustid import AcoustIdProvider
+from musicvault.plugins.builtin.ampache import AmpachePlugin
 from musicvault.plugins.builtin.cover_art_archive import CoverArtArchiveProvider
 from musicvault.plugins.builtin.embedded_art import EmbeddedArtProvider
+from musicvault.plugins.builtin.emby import EmbyPlugin
 from musicvault.plugins.builtin.filename_parser import FilenameParserProvider
+from musicvault.plugins.builtin.funkwhale import FunkwhalePlugin
 from musicvault.plugins.builtin.jellyfin import JellyfinPlugin
+from musicvault.plugins.builtin.koel import KoelPlugin
 from musicvault.plugins.builtin.local_tags import LocalTagsProvider
+from musicvault.plugins.builtin.lyrion import LyrionPlugin
 from musicvault.plugins.builtin.musicbrainz import MusicBrainzProvider
 from musicvault.plugins.builtin.navidrome import NavidromePlugin
 from musicvault.plugins.builtin.plex import PlexPlugin
@@ -420,6 +425,11 @@ def _build_media_server_plugins() -> list[MediaServerPlugin]:
     return [
         NavidromePlugin(),
         JellyfinPlugin(),
+        EmbyPlugin(),
         PlexPlugin(),
         SubsonicPlugin(),
+        AmpachePlugin(),
+        KoelPlugin(),
+        FunkwhalePlugin(),
+        LyrionPlugin(),
     ]

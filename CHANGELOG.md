@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Albums cover preview** — selecting an album shows its front cover on the
+  right; sidebar order is Artists → Albums → Artwork.
+- **Media servers** — Emby, Ampache (Subsonic API), Koel, Funkwhale, and
+  Lyrion Music Server rescan plugins (Settings plugin list).
 - **Browse UI** — Artists / Albums / Artwork pages (search, track drill-down,
   cover status). Library page adds a zone **folder tree** (Incoming →
   artist/album path segments) with a full-height track table.

@@ -1,15 +1,19 @@
-"""Albums browse page — DB albums linked to this library."""
+"""Albums browse page — list + cover preview + tracks."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import UUID
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -23,7 +27,7 @@ from musicvault.gui.widgets.desktop import reveal_in_explorer
 
 
 class AlbumsPage(QWidget):
-    """List albums for the active library; selecting one shows tracks."""
+    """List albums for the active library; selection shows cover + tracks."""
 
     def __init__(self, container: Container, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -32,13 +36,15 @@ class AlbumsPage(QWidget):
         self._filter_artist_id: UUID | None = None
         self._album_ids: list[UUID] = []
         self._track_paths: list[str] = []
+        self._full_cover: QPixmap | None = None
 
         layout = QVBoxLayout(self)
         heading = QLabel("Albums")
         heading.setProperty("heading", True)
         layout.addWidget(heading)
         help_lbl = QLabel(
-            "Albums created during Identify. Select a row to list its tracks."
+            "Select an album to see its cover and tracks. Double-click a track "
+            "to reveal it in Explorer."
         )
         help_lbl.setWordWrap(True)
         help_lbl.setProperty("muted", True)
@@ -61,7 +67,12 @@ class AlbumsPage(QWidget):
         toolbar.addWidget(self._clear_filter)
         layout.addLayout(toolbar)
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
+        main_split = QSplitter(Qt.Orientation.Horizontal)
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        list_split = QSplitter(Qt.Orientation.Vertical)
         self._table = QTableWidget(0, 5)
         self._table.setHorizontalHeaderLabels(
             ["Album", "Artist", "Year", "Tracks", "Cover"]
@@ -70,7 +81,7 @@ class AlbumsPage(QWidget):
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.itemSelectionChanged.connect(self._on_album_selected)
-        splitter.addWidget(self._table)
+        list_split.addWidget(self._table)
 
         tracks_box = QWidget()
         tracks_layout = QVBoxLayout(tracks_box)
@@ -84,14 +95,46 @@ class AlbumsPage(QWidget):
         self._tracks.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._tracks.horizontalHeader().setStretchLastSection(True)
         self._tracks.doubleClicked.connect(self._reveal_track)
-        tracks_layout.addWidget(self._tracks)
-        splitter.addWidget(tracks_box)
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 3)
-        layout.addWidget(splitter)
+        tracks_layout.addWidget(self._tracks, stretch=1)
+        list_split.addWidget(tracks_box)
+        list_split.setStretchFactor(0, 2)
+        list_split.setStretchFactor(1, 2)
+        left_layout.addWidget(list_split)
+        main_split.addWidget(left)
+
+        cover_panel = QFrame()
+        cover_panel.setProperty("dashPanel", True)
+        cover_layout = QVBoxLayout(cover_panel)
+        self._cover_title = QLabel("Cover")
+        self._cover_title.setProperty("panelTitle", True)
+        self._cover_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cover_layout.addWidget(self._cover_title)
+        self._cover_meta = QLabel("Select an album")
+        self._cover_meta.setProperty("muted", True)
+        self._cover_meta.setWordWrap(True)
+        self._cover_meta.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cover_layout.addWidget(self._cover_meta)
+        self._cover_image = QLabel()
+        self._cover_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._cover_image.setMinimumSize(220, 220)
+        self._cover_image.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        self._cover_image.setScaledContents(False)
+        cover_layout.addWidget(self._cover_image, stretch=1)
+        self._cover_source = QLabel("")
+        self._cover_source.setProperty("muted", True)
+        self._cover_source.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cover_layout.addWidget(self._cover_source)
+        main_split.addWidget(cover_panel)
+        main_split.setStretchFactor(0, 3)
+        main_split.setStretchFactor(1, 2)
+        main_split.setChildrenCollapsible(False)
+        layout.addWidget(main_split, stretch=1)
 
         self._status = QLabel("")
         layout.addWidget(self._status)
+        self._clear_cover()
 
     def set_library(self, library_id: UUID | None) -> None:
         self._library_id = library_id
@@ -115,6 +158,7 @@ class AlbumsPage(QWidget):
         self._tracks.setRowCount(0)
         self._track_paths = []
         self._tracks_label.setText("Select an album to list tracks")
+        self._clear_cover()
         if self._library_id is None:
             self._status.setText("No library selected — create one in Settings.")
             return
@@ -147,6 +191,7 @@ class AlbumsPage(QWidget):
     def _on_album_selected(self) -> None:
         album_id = self._selected_album_id()
         if album_id is None or self._library_id is None:
+            self._clear_cover()
             return
         tracks = self._container.track_repo.list_by_album(
             self._library_id, album_id, limit=500
@@ -157,6 +202,60 @@ class AlbumsPage(QWidget):
         self._track_paths = fill_track_table(
             self._tracks, tracks, columns=("Title", "Zone", "File", "Confidence")
         )
+        self._show_cover(album_id, title)
+
+    def _show_cover(self, album_id: UUID, title: str) -> None:
+        self._cover_title.setText(title)
+        art = self._container.artwork_repo.get_primary_for_album(album_id)
+        if art is None or not art.file_path:
+            self._cover_meta.setText("No cover on file for this album")
+            self._cover_image.clear()
+            self._cover_image.setText("No cover")
+            self._cover_source.setText("")
+            return
+        path = Path(art.file_path)
+        if not path.is_file():
+            self._cover_meta.setText("Cover path missing from cache")
+            self._cover_image.clear()
+            self._cover_image.setText("Missing file")
+            self._cover_source.setText(art.file_path)
+            return
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            self._cover_meta.setText("Could not decode cover image")
+            self._cover_image.clear()
+            self._cover_image.setText("Invalid image")
+            self._cover_source.setText(str(path))
+            return
+        self._cover_meta.setText(f"{art.width}×{art.height}")
+        self._cover_source.setText(f"{art.source} · {path.name}")
+        self._cover_image.setText("")
+        self._set_scaled_cover(pixmap)
+
+    def _set_scaled_cover(self, pixmap: QPixmap) -> None:
+        size = self._cover_image.size()
+        if size.width() < 40 or size.height() < 40:
+            size = self._cover_image.minimumSize()
+        scaled = pixmap.scaled(
+            size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self._cover_image.setPixmap(scaled)
+        self._full_cover = pixmap
+
+    def resizeEvent(self, event: object) -> None:  # noqa: N802 - Qt
+        super().resizeEvent(event)  # type: ignore[misc]
+        if self._full_cover is not None and not self._full_cover.isNull():
+            self._set_scaled_cover(self._full_cover)
+
+    def _clear_cover(self) -> None:
+        self._cover_title.setText("Cover")
+        self._cover_meta.setText("Select an album")
+        self._cover_image.clear()
+        self._cover_image.setText("")
+        self._full_cover = None
+        self._cover_source.setText("")
 
     def _reveal_track(self) -> None:
         rows = {index.row() for index in self._tracks.selectedIndexes()}

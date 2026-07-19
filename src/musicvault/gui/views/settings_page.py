@@ -220,7 +220,19 @@ class SettingsPage(QWidget):
         media = QGroupBox("Media servers")
         media_form = QFormLayout(media)
         self._ms_plugin = QComboBox()
-        self._ms_plugin.addItems(["navidrome", "jellyfin", "plex", "subsonic"])
+        self._ms_plugin.addItems(
+            [
+                "navidrome",
+                "jellyfin",
+                "emby",
+                "plex",
+                "subsonic",
+                "ampache",
+                "koel",
+                "funkwhale",
+                "lyrion",
+            ]
+        )
         self._ms_url = QLineEdit()
         self._ms_url.setPlaceholderText("https://navidrome.example:4533")
         self._ms_username = QLineEdit()

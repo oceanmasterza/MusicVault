@@ -48,9 +48,9 @@ _NAV = (
     ("Review", "review"),
     ("Artists", "artists"),
     ("Albums", "albums"),
+    ("Artwork", "artwork"),
     ("Duplicates", "duplicates"),
     ("Jobs", "jobs"),
-    ("Artwork", "artwork"),
     ("Reports", "reports"),
     ("Rules", "rules"),
     ("Logs", "logs"),
@@ -137,10 +137,11 @@ class MainWindow(QMainWindow):
             "settings": self._settings_page,
             "plugins": StubPage(
                 "Plugins",
-                "Plugin manager UI is next on the polish list. Built-in providers "
-                "already run from Settings and the pipeline: local tags, filename "
-                "parser, MusicBrainz, AcoustID, Cover Art Archive, and media servers "
-                "(Navidrome, Jellyfin, Plex, Subsonic).",
+                "Plugin manager UI is next on the polish list. Built-in media servers "
+                "are already selectable in Settings: Navidrome, Jellyfin, Emby, Plex, "
+                "Subsonic, Ampache, Koel, Funkwhale, and Lyrion. Metadata/artwork "
+                "providers (tags, MusicBrainz, AcoustID, Cover Art Archive) run from "
+                "the processing pipeline.",
             ),
         }
 

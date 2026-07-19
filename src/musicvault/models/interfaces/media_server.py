@@ -1,9 +1,8 @@
-"""Media server plugin protocol — Subsonic / Jellyfin / Plex / etc.
+"""Media server plugin protocol — Subsonic / Jellyfin / Plex / Emby / etc.
 
-See docs/architecture/05-plugin-api.md ("Media Server Plugins"). Phase 15
-ships the protocol plus Navidrome (Subsonic + optional read-only DB),
-generic Subsonic, Jellyfin, and Plex rescan plugins. Full validation
-audits for every server stay deferred.
+See docs/architecture/05-plugin-api.md ("Media Server Plugins"). Ships
+Navidrome, Jellyfin, Emby, Plex, Subsonic, Ampache, Koel, Funkwhale, and
+Lyrion rescan plugins. Deep validation audits stay deferred.
 """
 
 from __future__ import annotations

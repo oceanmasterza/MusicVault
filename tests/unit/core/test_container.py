@@ -224,7 +224,17 @@ def test_bootstrap_wires_the_phase_15_media_server_stack(
     assert isinstance(container.media_server_repo, MediaServerStateRepository)
     assert isinstance(container.media_server_worker, MediaServerWorker)
     ids = [p.plugin_id for p in container.plugin_manager.get_media_servers()]
-    assert ids == ["navidrome", "jellyfin", "plex", "subsonic"]
+    assert ids == [
+        "navidrome",
+        "jellyfin",
+        "emby",
+        "plex",
+        "subsonic",
+        "ampache",
+        "koel",
+        "funkwhale",
+        "lyrion",
+    ]
     container.close()
 
 
