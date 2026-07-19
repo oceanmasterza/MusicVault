@@ -8,20 +8,14 @@ structure, updates the track row, and writes an `operations` +
 :class:`~musicvault.services.operation_orchestrator.OperationOrchestrator`
 can reverse the move.
 
-Safe-move policy (no algorithm is documented — this is the
-implementation's fill-in): destinations are never overwritten. On a
-name collision the new file gets a `` (1)`` / `` (2)`` suffix.
-:func:`shutil.move` handles cross-volume moves via copy2 + unlink;
-nothing is ever hard-deleted.
+**In-place processing:** originals stay in Incoming through identify/rules.
+The usual success path is a single move **incoming → library**. Staging →
+library auto-approve remains for tracks already in staging (legacy /
+manual). Moves into ``library`` enqueue ``sync_media_server``.
 
-**Auto-approve** (docs/architecture/10-revision-v2.md watch-folder
-flow): after completing a move *into staging*, if the track's
-`overall_confidence` meets the library's `auto_approve_threshold`, it
-has no pending review items, and it belongs to no open duplicate group,
-a follow-up `organize_file` job to `library` is enqueued — completing
-the zero-click incoming → staging → library flow. Moves that land in
-the canonical ``library`` zone enqueue ``sync_media_server`` so
-configured media servers (Navidrome / Jellyfin / Plex / …) can rescan.
+Safe-move policy: destinations are never overwritten. On a name collision
+the new file gets a `` (1)`` / `` (2)`` suffix. :func:`shutil.move` handles
+cross-volume moves via copy2 + unlink; nothing is ever hard-deleted.
 """
 
 from __future__ import annotations
@@ -32,10 +26,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
+
 from musicvault.db.repositories.album_repo import AlbumRepository
 from musicvault.db.repositories.artist_repo import ArtistRepository
 from musicvault.db.repositories.duplicate_repo import DuplicateRepository
 from musicvault.db.repositories.library_repo import LibraryRepository
+from musicvault.db.repositories.metadata_confidence_repo import MetadataConfidenceRepository
 from musicvault.db.repositories.operation_repo import (
     OperationRepository,
     build_move_snapshot_payload,
@@ -71,6 +68,8 @@ class OrganizerWorker:
         operation_repo: OperationRepository,
         organize_engine: OrganizeEngine,
         job_queue: JobQueueService,
+        *,
+        metadata_confidence_repo: MetadataConfidenceRepository | None = None,
     ) -> None:
         self._tracks = track_repo
         self._libraries = library_repo
@@ -81,6 +80,7 @@ class OrganizerWorker:
         self._operations = operation_repo
         self._engine = organize_engine
         self._job_queue = job_queue
+        self._confidence = metadata_confidence_repo
 
     def execute(self, job: Job) -> None:
         track_id = UUID(job.payload["track_id"])
@@ -120,9 +120,18 @@ class OrganizerWorker:
             file_name=final.name,
             updated_at=now,
         )
-        self._tracks.upsert(updated)
+        try:
+            self._tracks.upsert(updated)
+        except IntegrityError:
+            collided = Path(updated.file_path)
+            final = _unique_sibling(collided)
+            if collided.exists() and collided != final:
+                collided.rename(final)
+            updated = replace(updated, file_path=str(final), file_name=final.name)
+            self._tracks.upsert(updated)
         self._record_move(track, updated, now)
 
+        # Legacy/manual: tracks already in staging may still auto-promote.
         if target is LibraryZone.STAGING and self._should_auto_approve(updated, library):
             self._job_queue.enqueue(
                 JobType.ORGANIZE_FILE,
@@ -164,6 +173,11 @@ class OrganizerWorker:
             artist = self._artists.get(track.artist_id)
             if artist is not None:
                 artist_name = artist.name
+        if artist_name is None and self._confidence is not None:
+            for field in self._confidence.list_for_track(track.id):
+                if field.field == "artist" and field.value:
+                    artist_name = str(field.value)
+                    break
         album_title: str | None = None
         album_year: int | None = None
         if track.album_id is not None:
@@ -171,6 +185,11 @@ class OrganizerWorker:
             if album is not None:
                 album_title = album.title
                 album_year = album.year
+        if album_title is None and self._confidence is not None:
+            for field in self._confidence.list_for_track(track.id):
+                if field.field == "album" and field.value:
+                    album_title = str(field.value)
+                    break
         return Path(
             self._engine.destination_path(
                 library,
@@ -232,14 +251,50 @@ class OrganizerWorker:
 def _safe_move(source: Path, destination: Path) -> Path:
     """Move ``source`` to ``destination``, suffixing on collision.
 
-    Never overwrites an existing file; parent directories are created
-    as needed.
+    Retries briefly on Windows ``WinError 32`` (file in use) — common when
+    Explorer preview, antivirus, or a just-finished fingerprint still holds
+    the handle. Never overwrites an existing file.
     """
+    import time
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     final = destination
     counter = 1
     while final.exists():
         final = destination.with_name(f"{destination.stem} ({counter}){destination.suffix}")
         counter += 1
-    shutil.move(str(source), str(final))
-    return final
+
+    last_exc: OSError | None = None
+    for attempt in range(1, 8):
+        try:
+            shutil.move(str(source), str(final))
+            return final
+        except OSError as exc:
+            last_exc = exc
+            # WinError 32 / errno 13 — file locked; back off and retry.
+            if getattr(exc, "winerror", None) == 32 or exc.errno in {13, 11}:
+                time.sleep(0.15 * attempt)
+                continue
+            raise
+    assert last_exc is not None
+    raise last_exc
+
+
+def _unique_sibling(path: Path) -> Path:
+    """Return ``path`` or the next free ``stem (n).suffix`` sibling."""
+    if not path.exists():
+        # Path may be reserved in DB but not on disk — still avoid the DB collision.
+        candidate = path
+        counter = 1
+        # Caller already hit UNIQUE; force at least one suffix.
+        candidate = path.with_name(f"{path.stem} ({counter}){path.suffix}")
+        while candidate.exists():
+            counter += 1
+            candidate = path.with_name(f"{path.stem} ({counter}){path.suffix}")
+        return candidate
+    counter = 1
+    candidate = path.with_name(f"{path.stem} ({counter}){path.suffix}")
+    while candidate.exists():
+        counter += 1
+        candidate = path.with_name(f"{path.stem} ({counter}){path.suffix}")
+    return candidate

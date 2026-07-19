@@ -144,23 +144,39 @@ class JobRepository:
         killed mid-execution — see docs/architecture/10-revision-v2.md,
         "Resume After Crash."
         """
-        with self._engine.begin() as conn:
-            orphaned_ids = (
-                conn.execute(
-                    select(jobs_table.c.id).where(jobs_table.c.status == JobStatus.RUNNING.value)
-                )
-                .scalars()
-                .all()
-            )
-            if not orphaned_ids:
-                return 0
+        import time
 
-            conn.execute(
-                update(jobs_table)
-                .where(jobs_table.c.id.in_(orphaned_ids))
-                .values(status=JobStatus.RETRY.value, scheduled_at=None)
-            )
-        return len(orphaned_ids)
+        from sqlalchemy.exc import OperationalError
+
+        last_exc: OperationalError | None = None
+        for attempt in range(1, 6):
+            try:
+                with self._engine.begin() as conn:
+                    orphaned_ids = (
+                        conn.execute(
+                            select(jobs_table.c.id).where(
+                                jobs_table.c.status == JobStatus.RUNNING.value
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                    if not orphaned_ids:
+                        return 0
+
+                    conn.execute(
+                        update(jobs_table)
+                        .where(jobs_table.c.id.in_(orphaned_ids))
+                        .values(status=JobStatus.RETRY.value, scheduled_at=None)
+                    )
+                return len(orphaned_ids)
+            except OperationalError as exc:
+                last_exc = exc
+                # Another process may still be releasing the DB (previous
+                # crash, or a short-lived spawn). Back off and retry.
+                time.sleep(0.2 * attempt)
+        assert last_exc is not None
+        raise last_exc
 
     def reset_for_retry(self, job_id: UUID) -> None:
         """Unconditionally reset a job back to `pending` with a clean
@@ -189,27 +205,39 @@ class JobRepository:
         """Move every `retry` job whose backoff has elapsed back to
         `pending`, so :meth:`claim_pending` picks it up on its next poll.
         """
-        with self._engine.begin() as conn:
-            due_ids = (
-                conn.execute(
-                    select(jobs_table.c.id).where(
-                        jobs_table.c.status == JobStatus.RETRY.value,
-                        (jobs_table.c.scheduled_at.is_(None))
-                        | (jobs_table.c.scheduled_at <= now.isoformat()),
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            if not due_ids:
-                return 0
+        import time
 
-            conn.execute(
-                update(jobs_table)
-                .where(jobs_table.c.id.in_(due_ids))
-                .values(status=JobStatus.PENDING.value)
-            )
-        return len(due_ids)
+        from sqlalchemy.exc import OperationalError
+
+        last_exc: OperationalError | None = None
+        for attempt in range(1, 6):
+            try:
+                with self._engine.begin() as conn:
+                    due_ids = (
+                        conn.execute(
+                            select(jobs_table.c.id).where(
+                                jobs_table.c.status == JobStatus.RETRY.value,
+                                (jobs_table.c.scheduled_at.is_(None))
+                                | (jobs_table.c.scheduled_at <= now.isoformat()),
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                    if not due_ids:
+                        return 0
+
+                    conn.execute(
+                        update(jobs_table)
+                        .where(jobs_table.c.id.in_(due_ids))
+                        .values(status=JobStatus.PENDING.value)
+                    )
+                return len(due_ids)
+            except OperationalError as exc:
+                last_exc = exc
+                time.sleep(0.2 * attempt)
+        assert last_exc is not None
+        raise last_exc
 
     def count_by_status(self, library_id: UUID) -> dict[str, int]:
         """Job counts for `library_id`, grouped by status — the raw
@@ -249,6 +277,81 @@ class JobRepository:
                     jobs_table.c.completed_at >= since.isoformat(),
                 )
             ).scalar_one()
+
+    def has_active_for_track(
+        self,
+        library_id: UUID,
+        job_type: JobType,
+        track_id: UUID,
+        *,
+        statuses: Sequence[JobStatus] = (
+            JobStatus.PENDING,
+            JobStatus.RUNNING,
+            JobStatus.RETRY,
+        ),
+    ) -> bool:
+        """True when a non-terminal job of ``job_type`` already targets ``track_id``."""
+        track_key = str(track_id)
+        needle = f'%"track_id": "{track_key}"%'
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                select(func.count())
+                .select_from(jobs_table)
+                .where(
+                    jobs_table.c.library_id == uuid_to_blob(library_id),
+                    jobs_table.c.job_type == job_type.value,
+                    jobs_table.c.status.in_([status.value for status in statuses]),
+                    jobs_table.c.payload.like(needle),
+                )
+            ).scalar_one()
+        return int(row) > 0
+
+    def summarize_failures(
+        self, library_id: UUID, *, limit: int = 8
+    ) -> list[tuple[str, str, int]]:
+        """Top failed-job error patterns for the Dashboard.
+
+        Returns ``(job_type, error_summary, count)`` sorted by count desc.
+        """
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(
+                    jobs_table.c.job_type,
+                    jobs_table.c.error_message,
+                    func.count().label("c"),
+                )
+                .where(
+                    jobs_table.c.library_id == uuid_to_blob(library_id),
+                    jobs_table.c.status == JobStatus.FAILED.value,
+                    jobs_table.c.error_message.is_not(None),
+                )
+                .group_by(jobs_table.c.job_type, jobs_table.c.error_message)
+                .order_by(func.count().desc())
+                .limit(limit * 4)
+            ).all()
+        # Collapse near-identical "No such file: <path>" messages into one bucket.
+        buckets: dict[tuple[str, str], int] = {}
+        for job_type, error_message, count in rows:
+            summary = _summarize_error(str(error_message or ""))
+            key = (str(job_type), summary)
+            buckets[key] = buckets.get(key, 0) + int(count)
+        ranked = sorted(buckets.items(), key=lambda item: item[1], reverse=True)
+        return [(job_type, summary, count) for (job_type, summary), count in ranked[:limit]]
+
+
+def _summarize_error(message: str) -> str:
+    text_msg = message.strip()
+    if "No such file" in text_msg or "cannot find the file" in text_msg.lower():
+        return "File missing (moved or deleted before the job ran)"
+    if "UNIQUE constraint failed: tracks.file_path" in text_msg:
+        return "Organize path collision (two tracks claimed the same destination)"
+    if "database is locked" in text_msg.lower():
+        return "Database busy / locked"
+    if "WinError 32" in text_msg or "being used by another process" in text_msg:
+        return "File in use by another process"
+    if len(text_msg) > 120:
+        return text_msg[:117] + "..."
+    return text_msg
 
 
 def _to_row(job: Job) -> dict[str, object]:

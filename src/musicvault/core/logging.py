@@ -40,7 +40,8 @@ def configure_logging(paths: AppPaths, *, level: str = "INFO", console: bool = T
     """
     logger.remove()
 
-    if console:
+    # PyInstaller --windowed (runw) leaves sys.stderr as None; loguru rejects that.
+    if console and sys.stderr is not None:
         logger.add(sys.stderr, level=level, format=_CONSOLE_FORMAT, colorize=True)
 
     logger.add(

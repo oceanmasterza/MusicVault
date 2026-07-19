@@ -113,3 +113,30 @@ def test_fetch_returns_none_when_recording_has_no_releases() -> None:
 
 def test_fetch_returns_none_without_any_musicbrainz_handle() -> None:
     assert CoverArtArchiveProvider().fetch(ArtworkQuery(file_path="C:/x.flac")) is None
+
+
+@responses.activate
+def test_fetch_by_artist_and_album_searches_musicbrainz_then_caa() -> None:
+    responses.add(
+        responses.GET,
+        "https://musicbrainz.org/ws/2/release/",
+        json={
+            "releases": [
+                {"id": _RELEASE_MBID, "title": "OK Computer", "score": 100},
+            ]
+        },
+    )
+    responses.add(
+        responses.GET,
+        f"https://coverartarchive.org/release/{_RELEASE_MBID}/front",
+        body=_png(),
+        content_type="image/jpeg",
+    )
+
+    result = CoverArtArchiveProvider().fetch(
+        ArtworkQuery(artist="Radiohead", album="OK Computer")
+    )
+
+    assert result is not None
+    assert result.confidence == 0.75
+    assert result.source_id == _RELEASE_MBID

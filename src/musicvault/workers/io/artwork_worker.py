@@ -2,15 +2,17 @@
 
 I/O-bound (Tier 2 — HTTP + Mutagen + filesystem). Per
 docs/architecture/04-service-layer.md the route is *terminal or review*:
-nothing is enqueued downstream, but a missing or low-resolution cover
-parks an ``artwork_missing`` / ``artwork_low_res`` review item.
+nothing is enqueued downstream. Missing / low-resolution covers park
+``artwork_missing`` / ``artwork_low_res`` review items only when the
+track still needs identity review (or confidence is below threshold);
+confident tracks try network + embedded lookup silently.
 
 Selection policy (no algorithm is documented — this is the
 implementation's fill-in): providers are asked in priority order
 (Cover Art Archive 10 > Embedded 50) and the first result meeting the
 configured minimum resolution wins. If nothing meets the bar, the
 largest-area candidate is still stored — a small cover beats no cover —
-and an ``artwork_low_res`` item is parked so the user can upgrade it.
+and an ``artwork_low_res`` item may be parked so the user can upgrade it.
 
 Storage: image bytes are written once to the application cache
 directory (``cache/artwork/<hash[:2]>/<hash>.<ext>``, deduplicated by
@@ -29,7 +31,9 @@ from pathlib import Path
 from uuid import UUID
 
 from musicvault.db.repositories.album_repo import AlbumRepository
+from musicvault.db.repositories.artist_repo import ArtistRepository
 from musicvault.db.repositories.artwork_repo import ArtworkRepository
+from musicvault.db.repositories.metadata_confidence_repo import MetadataConfidenceRepository
 from musicvault.db.repositories.track_repo import TrackRepository
 from musicvault.db.uuid_utils import generate_uuid7
 from musicvault.models.entities.artwork import Artwork
@@ -47,6 +51,8 @@ _EXTENSION_BY_MIME = {
     "image/gif": ".gif",
     "image/webp": ".webp",
 }
+# Confident tracks: try hard to fetch art, but don't flood Review on miss.
+_ARTWORK_REVIEW_THRESHOLD = 0.90
 
 
 class ArtworkWorker:
@@ -62,9 +68,13 @@ class ArtworkWorker:
         artwork_dir: Path,
         min_width: int = 500,
         min_height: int = 500,
+        artist_repo: ArtistRepository | None = None,
+        metadata_confidence_repo: MetadataConfidenceRepository | None = None,
     ) -> None:
         self._tracks = track_repo
         self._albums = album_repo
+        self._artists = artist_repo
+        self._confidence = metadata_confidence_repo
         self._artwork = artwork_repo
         self._providers = sorted(providers, key=lambda p: p.priority)
         self._reviews = review_queue
@@ -89,20 +99,21 @@ class ArtworkWorker:
             self._tracks.upsert(track)
 
         if chosen is None:
-            self._park_review(
-                job.library_id,
-                track,
-                ReviewType.ARTWORK_MISSING,
-                title=f"No artwork found for '{track.file_name}'",
-                description="No provider returned a cover image for this track.",
-                now=now,
-            )
+            if _should_park_artwork_review(track):
+                self._park_review(
+                    job.library_id,
+                    track,
+                    ReviewType.ARTWORK_MISSING,
+                    title=f"No artwork found for '{track.file_name}'",
+                    description="No provider returned a cover image for this track.",
+                    now=now,
+                )
             self._job_queue.mark_completed(job.id)
             return
 
         self._store_and_link(track, chosen, now)
 
-        if not self._meets_minimum(chosen):
+        if not self._meets_minimum(chosen) and _should_park_artwork_review(track):
             self._park_review(
                 job.library_id,
                 track,
@@ -121,17 +132,33 @@ class ArtworkWorker:
         mb_release_id: str | None = None
         mb_release_group_id: str | None = None
         album_title: str | None = None
+        artist_name: str | None = None
         if track.album_id is not None:
             album = self._albums.get(track.album_id)
             if album is not None:
                 mb_release_id = album.mbid
                 mb_release_group_id = album.release_group_mbid
                 album_title = album.title
+                if album.album_artist_id is not None and self._artists is not None:
+                    album_artist = self._artists.get(album.album_artist_id)
+                    if album_artist is not None:
+                        artist_name = album_artist.name
+        if artist_name is None and track.artist_id is not None and self._artists is not None:
+            artist = self._artists.get(track.artist_id)
+            if artist is not None:
+                artist_name = artist.name
+        if self._confidence is not None and (artist_name is None or album_title is None):
+            for field in self._confidence.list_for_track(track.id):
+                if artist_name is None and field.field == "artist" and field.value:
+                    artist_name = str(field.value)
+                elif album_title is None and field.field == "album" and field.value:
+                    album_title = str(field.value)
         return ArtworkQuery(
             file_path=track.file_path,
             mb_release_id=mb_release_id,
             mb_release_group_id=mb_release_group_id,
             mb_recording_id=track.mb_recording_id,
+            artist=artist_name,
             album=album_title,
         )
 
@@ -218,3 +245,16 @@ class ArtworkWorker:
             ),
             now=now,
         )
+
+
+def _should_park_artwork_review(track: Track) -> bool:
+    """Park artwork issues only when identity itself still needs attention.
+
+    High-confidence tracks keep flowing through the pipeline; a missing
+    cover is logged by completing the job without a Review row.
+    """
+    if track.needs_review:
+        return True
+    if track.overall_confidence is None:
+        return True
+    return track.overall_confidence < _ARTWORK_REVIEW_THRESHOLD

@@ -18,7 +18,7 @@ from typing import Any
 
 from musicvault.core.exceptions import ConfigError, ConfigMigrationError, ConfigVersionError
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 
 @dataclass(frozen=True)
@@ -89,6 +89,10 @@ class MetadataConfig:
         "filename_parser",
     )
     acoustid_api_key: str = ""
+    # "all" = Chromaprint every file. "sample" = fingerprint until an album
+    # folder is confirmed, then trust remaining siblings by tags/filenames.
+    fingerprint_mode: str = "all"
+    fingerprint_sample_min: int = 3
 
 
 @dataclass(frozen=True)
@@ -151,11 +155,22 @@ def _migrate_v4_to_v5(raw: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
+def _migrate_v5_to_v6(raw: dict[str, Any]) -> dict[str, Any]:
+    migrated = dict(raw)
+    migrated["schema_version"] = 6
+    metadata = dict(migrated.get("metadata") or asdict(MetadataConfig()))
+    metadata.setdefault("fingerprint_mode", "all")
+    metadata.setdefault("fingerprint_sample_min", 3)
+    migrated["metadata"] = metadata
+    return migrated
+
+
 _MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
     3: _migrate_v3_to_v4,
     4: _migrate_v4_to_v5,
+    5: _migrate_v5_to_v6,
 }
 
 

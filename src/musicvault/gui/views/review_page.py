@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -34,7 +35,7 @@ class ReviewPage(QWidget):
         layout.addWidget(self._heading)
 
         self._table = QTableWidget(0, 4)
-        self._table.setHorizontalHeaderLabels(["Type", "Title", "Confidence", "Description"])
+        self._table.setHorizontalHeaderLabels(["Type", "Track", "Confidence", "Reason"])
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.horizontalHeader().setStretchLastSection(True)
@@ -42,18 +43,29 @@ class ReviewPage(QWidget):
 
         buttons = QHBoxLayout()
         self._approve_btn = QPushButton("Approve")
+        self._approve_btn.setDefault(True)
+        self._approve_btn.setToolTip("Approve selected items (Ctrl+Enter)")
         self._reject_btn = QPushButton("Reject")
+        self._reject_btn.setToolTip("Reject selected items (Ctrl+Shift+R)")
         self._defer_btn = QPushButton("Defer")
+        self._refresh_btn = QPushButton("Refresh")
         self._reject_btn.setProperty("secondary", True)
         self._defer_btn.setProperty("secondary", True)
+        self._refresh_btn.setProperty("secondary", True)
         self._approve_btn.clicked.connect(self._approve_selected)
         self._reject_btn.clicked.connect(self._reject_selected)
         self._defer_btn.clicked.connect(self._defer_selected)
+        self._refresh_btn.clicked.connect(self.refresh)
         buttons.addWidget(self._approve_btn)
         buttons.addWidget(self._reject_btn)
         buttons.addWidget(self._defer_btn)
+        buttons.addWidget(self._refresh_btn)
         buttons.addStretch(1)
         layout.addLayout(buttons)
+
+        QShortcut(QKeySequence("Ctrl+Return"), self, activated=self._approve_selected)
+        QShortcut(QKeySequence("Ctrl+Enter"), self, activated=self._approve_selected)
+        QShortcut(QKeySequence("Ctrl+Shift+R"), self, activated=self._reject_selected)
 
     def set_library(self, library_id: UUID | None) -> None:
         self._library_id = library_id

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -32,8 +33,26 @@ def test_find_fpcalc_returns_none_when_missing(
 ) -> None:
     monkeypatch.delenv("FPCALC", raising=False)
     monkeypatch.delenv("FPCALC_COMMAND", raising=False)
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
     monkeypatch.setattr(
         "musicvault.core.native_bins.application_dir",
         lambda: tmp_path,
     )
     assert find_fpcalc() is None
+
+
+def test_find_fpcalc_checks_meipass(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("FPCALC", raising=False)
+    monkeypatch.delenv("FPCALC_COMMAND", raising=False)
+    meipass = tmp_path / "_internal"
+    meipass.mkdir()
+    fake = meipass / "fpcalc.exe"
+    fake.write_bytes(b"MZ")
+    monkeypatch.setattr(sys, "_MEIPASS", str(meipass), raising=False)
+    monkeypatch.setattr(
+        "musicvault.core.native_bins.application_dir",
+        lambda: tmp_path / "empty",
+    )
+    assert find_fpcalc() == fake.resolve()

@@ -171,7 +171,7 @@ def test_execute_archive_mp3_rule_matches_when_lossless_duplicate_exists(
     assert any("Archive MP3" in item.title for item in rule_items)
 
 
-def test_execute_enqueues_organize_to_staging_for_incoming_tracks(
+def test_execute_enqueues_organize_to_library_when_ready(
     track_repo: TrackRepository,
     job_queue: JobQueueService,
     job_repo: JobRepository,
@@ -181,9 +181,16 @@ def test_execute_enqueues_organize_to_staging_for_incoming_tracks(
     library_id: UUID,
     track_id: UUID,
 ) -> None:
-    """Phase 10: rules are the last analysis stage — an incoming track then
-    moves to staging via an organize_file job."""
-    track_repo.upsert(_make_track(library_id, track_id, bitrate=320))
+    """Confirmed identity: single move incoming → library (no staging hop)."""
+    track_repo.upsert(
+        _make_track(
+            library_id,
+            track_id,
+            bitrate=320,
+            overall_confidence=0.95,
+            needs_review=False,
+        )
+    )
     event_bus = EventBus()
     rules = RulesEngine(
         rule_repo,
@@ -214,8 +221,60 @@ def test_execute_enqueues_organize_to_staging_for_incoming_tracks(
         if job.job_type is JobType.ORGANIZE_FILE
     ]
     assert len(organize) == 1
-    assert organize[0].payload == {"track_id": str(track_id), "target_zone": "staging"}
+    assert organize[0].payload == {"track_id": str(track_id), "target_zone": "library"}
     assert organize[0].parent_job_id == job_id
+
+
+def test_execute_leaves_incoming_when_not_ready_for_library(
+    track_repo: TrackRepository,
+    job_queue: JobQueueService,
+    job_repo: JobRepository,
+    review_repo: ReviewRepository,
+    rule_repo: RuleRepository,
+    engine: Engine,
+    library_id: UUID,
+    track_id: UUID,
+) -> None:
+    """Weak / review-flagged tracks stay in Incoming until approval."""
+    track_repo.upsert(
+        _make_track(
+            library_id,
+            track_id,
+            bitrate=320,
+            overall_confidence=0.70,
+            needs_review=True,
+        )
+    )
+    event_bus = EventBus()
+    rules = RulesEngine(
+        rule_repo,
+        track_repo,
+        ArtistRepository(engine),
+        ReviewQueueService(review_repo, track_repo, event_bus),
+        event_bus,
+    )
+    job_id = job_queue.enqueue(
+        JobType.EVALUATE_RULES, library_id, {"track_id": str(track_id)}, now=_NOW
+    )
+    job_repo.update_status(job_id, JobStatus.RUNNING)
+
+    RuleWorker(track_repo, rules, DuplicateRepository(engine), job_queue).execute(
+        Job(
+            id=job_id,
+            library_id=library_id,
+            job_type=JobType.EVALUATE_RULES,
+            status=JobStatus.RUNNING,
+            payload={"track_id": str(track_id)},
+            created_at=_NOW,
+        )
+    )
+
+    organize = [
+        job
+        for job in job_repo.list_by_status(JobStatus.PENDING, library_id=library_id)
+        if job.job_type is JobType.ORGANIZE_FILE
+    ]
+    assert organize == []
 
 
 def test_execute_does_not_enqueue_organize_for_non_incoming_tracks(

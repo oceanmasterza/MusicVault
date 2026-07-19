@@ -29,6 +29,7 @@ def test_lookup_by_fingerprint_parses_best_result() -> None:
                             "id": "mbid-high",
                             "title": "High Title",
                             "artists": [{"name": "Artist"}],
+                            "releasegroups": [{"id": "rg-1", "title": "High Album"}],
                         }
                     ],
                 },
@@ -45,7 +46,12 @@ def test_lookup_by_fingerprint_parses_best_result() -> None:
     assert by_field["mb_recording_id"] == "mbid-high"
     assert by_field["title"] == "High Title"
     assert by_field["artist"] == "Artist"
+    assert by_field["album"] == "High Album"
+    assert by_field["mb_release_group_id"] == "rg-1"
     assert result.lookup_method == "fingerprint"
+    assert min(
+        f.confidence for f in result.fields if f.field in {"artist", "album", "title"}
+    ) >= 0.90
 
 
 def test_lookup_by_fingerprint_without_api_key_returns_none() -> None:

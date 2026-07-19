@@ -25,9 +25,11 @@ from typing import Any
 from uuid import UUID
 
 from musicvault.db.repositories.file_identity_repo import FileIdentityRepository
+from musicvault.db.repositories.track_repo import TrackRepository
 from musicvault.db.writer import DatabaseWriter, WriteDTO
 from musicvault.models.entities.job import Job, JobType
 from musicvault.models.value_objects.file_identity import FileIdentity
+from musicvault.services.folder_trust import FolderTrustService
 from musicvault.services.job_queue_service import JobQueueService
 
 _CHUNK_SIZE = 1024 * 1024  # 1 MiB — bounds memory use regardless of file size.
@@ -72,10 +74,17 @@ class HashWorker:
         file_identity_repo: FileIdentityRepository,
         database_writer: DatabaseWriter,
         job_queue: JobQueueService,
+        *,
+        track_repo: TrackRepository | None = None,
+        folder_trust: FolderTrustService | None = None,
+        fingerprint_mode: str = "all",
     ) -> None:
         self._file_identity_repo = file_identity_repo
         self._writer = database_writer
         self._job_queue = job_queue
+        self._tracks = track_repo
+        self._folder_trust = folder_trust
+        self._fingerprint_mode = fingerprint_mode
 
     def handle_result(self, job: Job, result: dict[str, Any]) -> None:
         """Process one :func:`compute_hash` result: persist
@@ -86,7 +95,13 @@ class HashWorker:
         """
         error = result.get("error")
         if error is not None:
-            self._job_queue.mark_failed(job.id, error)
+            if _is_missing_file_error(str(error)) and self._recover_moved_file(job):
+                return
+            self._job_queue.mark_failed(
+                job.id,
+                str(error),
+                terminal=_is_missing_file_error(str(error)),
+            )
             return
 
         track_id = UUID(result["track_id"])
@@ -128,13 +143,67 @@ class HashWorker:
         )
 
         if content_changed:
-            self._job_queue.enqueue(
-                JobType.FINGERPRINT_FILE,
-                job.library_id,
-                {
-                    "track_id": str(track_id),
-                    "file_path": job.payload["file_path"],
-                },
-                parent_job_id=job.id,
+            file_path = job.payload["file_path"]
+            track = None
+            if self._tracks is not None:
+                track = self._tracks.get_by_id(track_id)
+                if track is not None:
+                    file_path = track.file_path
+            skip_fingerprint = (
+                self._fingerprint_mode == "sample"
+                and self._folder_trust is not None
+                and track is not None
+                and self._folder_trust.is_trusted_for_track(track)
             )
+            if skip_fingerprint:
+                self._job_queue.enqueue(
+                    JobType.IDENTIFY_METADATA,
+                    job.library_id,
+                    {"track_id": str(track_id)},
+                    parent_job_id=job.id,
+                )
+            else:
+                self._job_queue.enqueue(
+                    JobType.FINGERPRINT_FILE,
+                    job.library_id,
+                    {
+                        "track_id": str(track_id),
+                        "file_path": file_path,
+                    },
+                    parent_job_id=job.id,
+                )
         self._job_queue.mark_completed(job.id)
+
+    def _recover_moved_file(self, job: Job) -> bool:
+        """If the track was organized away from the payload path, re-hash there once."""
+        if self._tracks is None:
+            return False
+        track_id = UUID(job.payload["track_id"])
+        track = self._tracks.get_by_id(track_id)
+        if track is None:
+            return False
+        current = Path(track.file_path)
+        payload_path = str(job.payload.get("file_path") or "")
+        if str(current) == payload_path or not current.is_file():
+            return False
+        if self._job_queue.has_active_for_track(JobType.HASH_FILE, job.library_id, track_id):
+            self._job_queue.mark_completed(job.id)
+            return True
+        self._job_queue.enqueue(
+            JobType.HASH_FILE,
+            job.library_id,
+            {"track_id": str(track_id), "file_path": str(current)},
+            parent_job_id=job.id,
+        )
+        self._job_queue.mark_completed(job.id)
+        return True
+
+
+def _is_missing_file_error(message: str) -> bool:
+    lower = message.lower()
+    return (
+        "no such file" in lower
+        or "cannot find the file" in lower
+        or "the system cannot find the file" in lower
+        or "errno 2" in lower
+    )

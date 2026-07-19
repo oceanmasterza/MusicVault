@@ -38,10 +38,12 @@ class LocalTagsProvider:
             return None
 
         fields: list[ProviderFieldResult] = []
+        # Core identity tags must clear the default 0.90 auto-approve gate.
+        # Secondary tags stay lower and are excluded from overall confidence.
         mapping = {
-            "title": ("title", 0.80),
-            "artist": ("artist", 0.75),
-            "album": ("album", 0.75),
+            "title": ("title", 0.92),
+            "artist": ("artist", 0.92),
+            "album": ("album", 0.92),
             "genre": ("genre", 0.70),
             "composer": ("composer", 0.65),
         }
@@ -52,11 +54,11 @@ class LocalTagsProvider:
 
         year = _parse_year(_first(audio, "date") or _first(audio, "year"))
         if year is not None:
-            fields.append(ProviderFieldResult("year", year, 0.70))
+            fields.append(ProviderFieldResult("year", year, 0.85))
 
         track_number = _parse_int(_first(audio, "tracknumber"))
         if track_number is not None:
-            fields.append(ProviderFieldResult("track_number", track_number, 0.75))
+            fields.append(ProviderFieldResult("track_number", track_number, 0.90))
 
         if not fields:
             return None

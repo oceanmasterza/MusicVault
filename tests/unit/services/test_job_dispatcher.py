@@ -172,10 +172,9 @@ def dispatcher(
         claim_batch_size=10,
         poll_interval_seconds=0.05,
     )
-    # Swap out the real process pool before any work is submitted.
-    real_cpu_pool = disp._cpu_pool  # noqa: SLF001
+    # Swap in a sync executor so CPU jobs do not spawn real processes in tests.
+    # The real ProcessPoolExecutor is created lazily on first CPU submit.
     disp._cpu_pool = _SynchronousExecutor()  # type: ignore[assignment]  # noqa: SLF001
-    real_cpu_pool.shutdown(wait=False, cancel_futures=True)
     yield disp
     disp.stop()
 

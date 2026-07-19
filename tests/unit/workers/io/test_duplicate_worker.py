@@ -5,12 +5,16 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
+from sqlalchemy import Engine, insert
+
+from musicvault.db.repositories.album_repo import AlbumRepository
 from musicvault.db.repositories.duplicate_repo import DuplicateRepository
 from musicvault.db.repositories.file_identity_repo import FileIdentityRepository
 from musicvault.db.repositories.job_repo import JobRepository
 from musicvault.db.repositories.review_repo import ReviewRepository
 from musicvault.db.repositories.track_repo import TrackRepository
-from musicvault.db.uuid_utils import generate_uuid7
+from musicvault.db.tables import albums
+from musicvault.db.uuid_utils import generate_uuid7, uuid_to_blob
 from musicvault.models.entities.duplicate_group import MatchType
 from musicvault.models.entities.job import Job, JobStatus, JobType
 from musicvault.models.entities.review_item import ReviewStatus, ReviewType
@@ -54,12 +58,29 @@ def _make_identity(track_id: UUID, **overrides: object) -> FileIdentity:
     return FileIdentity(**defaults)  # type: ignore[arg-type]
 
 
+def _insert_album(engine: Engine, title: str = "Same Album") -> UUID:
+    album_id = generate_uuid7()
+    with engine.begin() as conn:
+        conn.execute(
+            insert(albums).values(
+                id=uuid_to_blob(album_id),
+                title=title,
+                sort_title=title,
+                created_at="2026-07-17T00:00:00",
+                updated_at="2026-07-17T00:00:00",
+            )
+        )
+    return album_id
+
+
 def _worker(
     track_repo: TrackRepository,
     file_identity_repo: FileIdentityRepository,
     duplicate_repo: DuplicateRepository,
     review_queue: ReviewQueueService,
     job_queue: JobQueueService,
+    *,
+    engine: Engine | None = None,
 ) -> DuplicateWorker:
     return DuplicateWorker(
         track_repo,
@@ -68,6 +89,7 @@ def _worker(
         DuplicateMatcher(QualityScorer(DEFAULT_WEIGHTS)),
         review_queue,
         job_queue,
+        album_repo=AlbumRepository(engine) if engine is not None else None,
     )
 
 
@@ -103,11 +125,15 @@ def test_execute_groups_fingerprint_duplicates_and_flags_review(
     review_queue: ReviewQueueService,
     job_queue: JobQueueService,
     job_repo: JobRepository,
+    engine: Engine,
     library_id: UUID,
     track_id: UUID,
 ) -> None:
+    album_id = _insert_album(engine)
     flac_id = generate_uuid7()
-    track_repo.upsert(_make_track(library_id, track_id, codec="mp3", bitrate=320))
+    track_repo.upsert(
+        _make_track(library_id, track_id, codec="mp3", bitrate=320, album_id=album_id)
+    )
     track_repo.upsert(
         _make_track(
             library_id,
@@ -116,12 +142,15 @@ def test_execute_groups_fingerprint_duplicates_and_flags_review(
             bitrate=None,
             is_lossless=True,
             bit_depth=16,
+            album_id=album_id,
             file_path=f"C:/library/{flac_id}.flac",
         )
     )
     file_identity_repo.upsert(_make_identity(track_id, fingerprint_hash="fp-1"))
     file_identity_repo.upsert(_make_identity(flac_id, fingerprint_hash="fp-1"))
-    worker = _worker(track_repo, file_identity_repo, duplicate_repo, review_queue, job_queue)
+    worker = _worker(
+        track_repo, file_identity_repo, duplicate_repo, review_queue, job_queue, engine=engine
+    )
 
     job_id = _run_job(worker, job_queue, job_repo, library_id, track_id)
 
@@ -134,20 +163,16 @@ def test_execute_groups_fingerprint_duplicates_and_flags_review(
     members = duplicate_repo.get_members(group.id)
     assert {m.track_id for m in members} == {track_id, flac_id}
 
-    # Both tracks got quality scores persisted.
     assert track_repo.get_by_id(track_id).quality_score == 70  # type: ignore[union-attr]
     assert track_repo.get_by_id(flac_id).quality_score == 95  # type: ignore[union-attr]
 
-    # A possible_duplicate review item is linked to the group.
     pending = review_repo.list_by_status(ReviewStatus.PENDING, library_id=library_id)
     duplicates = [i for i in pending if i.review_type is ReviewType.POSSIBLE_DUPLICATE]
     assert len(duplicates) == 1
     assert duplicates[0].duplicate_group_id == group.id
 
-    # The MP3 now reports a lossless duplicate for the rules engine.
     assert duplicate_repo.has_lossless_duplicate(track_id) is True
 
-    # Chains to evaluate_rules.
     rule_jobs = [
         job
         for job in job_repo.list_by_status(JobStatus.PENDING)
@@ -157,6 +182,109 @@ def test_execute_groups_fingerprint_duplicates_and_flags_review(
     assert rule_jobs[0].payload["track_id"] == str(track_id)
 
 
+def test_execute_ignores_fingerprint_match_on_different_albums(
+    track_repo: TrackRepository,
+    file_identity_repo: FileIdentityRepository,
+    duplicate_repo: DuplicateRepository,
+    review_queue: ReviewQueueService,
+    job_queue: JobQueueService,
+    job_repo: JobRepository,
+    engine: Engine,
+    library_id: UUID,
+    track_id: UUID,
+) -> None:
+    album_a = _insert_album(engine, "Album A")
+    album_b = _insert_album(engine, "Album B")
+    other_id = generate_uuid7()
+    track_repo.upsert(
+        _make_track(
+            library_id,
+            track_id,
+            album_id=album_a,
+            mb_recording_id="same-recording",
+            overall_confidence=0.95,
+        )
+    )
+    track_repo.upsert(
+        _make_track(
+            library_id,
+            other_id,
+            album_id=album_b,
+            mb_recording_id="same-recording",
+            file_path=f"C:/incoming/{other_id}.mp3",
+            overall_confidence=0.95,
+        )
+    )
+    file_identity_repo.upsert(_make_identity(track_id, fingerprint_hash="fp-shared"))
+    file_identity_repo.upsert(_make_identity(other_id, fingerprint_hash="fp-shared"))
+    worker = _worker(
+        track_repo, file_identity_repo, duplicate_repo, review_queue, job_queue, engine=engine
+    )
+
+    _run_job(worker, job_queue, job_repo, library_id, track_id)
+
+    assert duplicate_repo.list_open_by_library(library_id) == []
+    assert review_queue.get_pending(library_id) == []
+
+
+def test_execute_auto_keeps_best_for_confident_same_album_duplicates(
+    track_repo: TrackRepository,
+    file_identity_repo: FileIdentityRepository,
+    duplicate_repo: DuplicateRepository,
+    review_queue: ReviewQueueService,
+    job_queue: JobQueueService,
+    job_repo: JobRepository,
+    engine: Engine,
+    library_id: UUID,
+    track_id: UUID,
+) -> None:
+    album_id = _insert_album(engine)
+    flac_id = generate_uuid7()
+    track_repo.upsert(
+        _make_track(
+            library_id,
+            track_id,
+            codec="mp3",
+            bitrate=320,
+            album_id=album_id,
+            overall_confidence=0.95,
+            needs_review=False,
+        )
+    )
+    track_repo.upsert(
+        _make_track(
+            library_id,
+            flac_id,
+            codec="flac",
+            bitrate=None,
+            is_lossless=True,
+            bit_depth=16,
+            album_id=album_id,
+            overall_confidence=0.95,
+            needs_review=False,
+            file_path=f"C:/library/{flac_id}.flac",
+        )
+    )
+    file_identity_repo.upsert(_make_identity(track_id, fingerprint_hash="fp-1"))
+    file_identity_repo.upsert(_make_identity(flac_id, fingerprint_hash="fp-1"))
+    worker = _worker(
+        track_repo, file_identity_repo, duplicate_repo, review_queue, job_queue, engine=engine
+    )
+
+    _run_job(worker, job_queue, job_repo, library_id, track_id)
+
+    assert duplicate_repo.list_open_by_library(library_id) == []
+    assert review_queue.get_pending(library_id) == []
+    archive_jobs = [
+        job
+        for job in job_repo.list_by_status(JobStatus.PENDING, library_id=library_id)
+        if job.job_type is JobType.ORGANIZE_FILE
+        and job.payload.get("target_zone") == "archive"
+    ]
+    assert len(archive_jobs) == 1
+    assert archive_jobs[0].payload["track_id"] == str(track_id)
+
+
 def test_execute_prefers_hash_match_over_weaker_tiers(
     track_repo: TrackRepository,
     file_identity_repo: FileIdentityRepository,
@@ -164,6 +292,7 @@ def test_execute_prefers_hash_match_over_weaker_tiers(
     review_queue: ReviewQueueService,
     job_queue: JobQueueService,
     job_repo: JobRepository,
+    engine: Engine,
     library_id: UUID,
     track_id: UUID,
 ) -> None:
@@ -183,7 +312,9 @@ def test_execute_prefers_hash_match_over_weaker_tiers(
     file_identity_repo.upsert(
         _make_identity(other_id, content_hash_sha256="same", fingerprint_hash="fp-1")
     )
-    worker = _worker(track_repo, file_identity_repo, duplicate_repo, review_queue, job_queue)
+    worker = _worker(
+        track_repo, file_identity_repo, duplicate_repo, review_queue, job_queue, engine=engine
+    )
 
     _run_job(worker, job_queue, job_repo, library_id, track_id)
 
@@ -201,15 +332,23 @@ def test_execute_is_idempotent_on_redetection(
     review_queue: ReviewQueueService,
     job_queue: JobQueueService,
     job_repo: JobRepository,
+    engine: Engine,
     library_id: UUID,
     track_id: UUID,
 ) -> None:
+    album_id = _insert_album(engine)
     other_id = generate_uuid7()
-    track_repo.upsert(_make_track(library_id, track_id))
-    track_repo.upsert(_make_track(library_id, other_id, file_path=f"C:/incoming/{other_id}.mp3"))
+    track_repo.upsert(_make_track(library_id, track_id, album_id=album_id))
+    track_repo.upsert(
+        _make_track(
+            library_id, other_id, album_id=album_id, file_path=f"C:/incoming/{other_id}.mp3"
+        )
+    )
     file_identity_repo.upsert(_make_identity(track_id, fingerprint_hash="fp-1"))
     file_identity_repo.upsert(_make_identity(other_id, fingerprint_hash="fp-1"))
-    worker = _worker(track_repo, file_identity_repo, duplicate_repo, review_queue, job_queue)
+    worker = _worker(
+        track_repo, file_identity_repo, duplicate_repo, review_queue, job_queue, engine=engine
+    )
 
     _run_job(worker, job_queue, job_repo, library_id, track_id)
     _run_job(worker, job_queue, job_repo, library_id, track_id)
@@ -227,12 +366,15 @@ def test_execute_without_matches_creates_no_group_but_still_chains_rules(
     review_queue: ReviewQueueService,
     job_queue: JobQueueService,
     job_repo: JobRepository,
+    engine: Engine,
     library_id: UUID,
     track_id: UUID,
 ) -> None:
     track_repo.upsert(_make_track(library_id, track_id))
     file_identity_repo.upsert(_make_identity(track_id, fingerprint_hash="fp-unique"))
-    worker = _worker(track_repo, file_identity_repo, duplicate_repo, review_queue, job_queue)
+    worker = _worker(
+        track_repo, file_identity_repo, duplicate_repo, review_queue, job_queue, engine=engine
+    )
 
     job_id = _run_job(worker, job_queue, job_repo, library_id, track_id)
 
@@ -253,10 +395,13 @@ def test_execute_marks_failed_when_track_missing(
     review_queue: ReviewQueueService,
     job_queue: JobQueueService,
     job_repo: JobRepository,
+    engine: Engine,
     library_id: UUID,
 ) -> None:
     missing = generate_uuid7()
-    worker = _worker(track_repo, file_identity_repo, duplicate_repo, review_queue, job_queue)
+    worker = _worker(
+        track_repo, file_identity_repo, duplicate_repo, review_queue, job_queue, engine=engine
+    )
 
     job_id = _run_job(worker, job_queue, job_repo, library_id, missing)
 

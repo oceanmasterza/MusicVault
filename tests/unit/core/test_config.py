@@ -207,18 +207,34 @@ def test_migrating_a_v4_config_adds_artwork_section(tmp_path: Path) -> None:
     assert persisted["artwork"] == asdict(ArtworkConfig())
 
 
-def test_artwork_config_round_trips_custom_settings(tmp_path: Path) -> None:
+def test_migrating_a_v5_config_adds_fingerprint_sampling_fields(tmp_path: Path) -> None:
     config_path = tmp_path / "config.json"
-    save_config(
-        AppConfig(artwork=ArtworkConfig(fetch_enabled=False, min_width=1000, min_height=1000)),
-        config_path,
-    )
+    v5_document = default_config().to_dict()
+    v5_document["schema_version"] = 5
+    del v5_document["metadata"]["fingerprint_mode"]
+    del v5_document["metadata"]["fingerprint_sample_min"]
+    config_path.write_text(json.dumps(v5_document), encoding="utf-8")
 
     config = load_config(config_path)
 
-    assert config.artwork.fetch_enabled is False
-    assert config.artwork.min_width == 1000
-    assert config.artwork.min_height == 1000
+    assert config.schema_version == CURRENT_SCHEMA_VERSION
+    assert config.metadata.fingerprint_mode == "all"
+    assert config.metadata.fingerprint_sample_min == 3
+
+
+def test_fingerprint_sampling_settings_round_trip(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    save_config(
+        AppConfig(
+            metadata=MetadataConfig(fingerprint_mode="sample", fingerprint_sample_min=5)
+        ),
+        config_path,
+    )
+
+    loaded = load_config(config_path)
+
+    assert loaded.metadata.fingerprint_mode == "sample"
+    assert loaded.metadata.fingerprint_sample_min == 5
 
 
 def test_load_config_raises_when_no_migration_exists_for_an_old_version(tmp_path: Path) -> None:

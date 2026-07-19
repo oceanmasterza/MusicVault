@@ -165,6 +165,33 @@ def test_no_artwork_parks_an_artwork_missing_review_item(
     assert artwork_repo.has_artwork_for_track(track_id) is False
 
 
+def test_confident_track_skips_artwork_missing_review(
+    track_repo: TrackRepository,
+    album_repo: AlbumRepository,
+    artwork_repo: ArtworkRepository,
+    review_queue: ReviewQueueService,
+    job_queue: JobQueueService,
+    job_repo: JobRepository,
+    library_id: UUID,
+    track_id: UUID,
+    artwork_dir: Path,
+) -> None:
+    from dataclasses import replace
+
+    track = track_repo.get_by_id(track_id)
+    assert track is not None
+    track_repo.upsert(replace(track, overall_confidence=0.95, needs_review=False))
+    provider = _StubProvider("cover_art_archive", 10, None)
+    worker = _make_worker(
+        track_repo, album_repo, artwork_repo, [provider], review_queue, job_queue, artwork_dir
+    )
+
+    worker.execute(_running_job(job_queue, job_repo, library_id, track_id))
+
+    assert review_queue.get_pending(library_id) == []
+    assert artwork_repo.has_artwork_for_track(track_id) is False
+
+
 def test_low_res_artwork_is_stored_but_flagged_for_review(
     track_repo: TrackRepository,
     album_repo: AlbumRepository,

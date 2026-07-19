@@ -75,5 +75,7 @@ credentials.json
 tools/*.exe
 tools/fpcalc*
 packaging/vendor/
+packaging/output/
+packaging/_setup_staging/
 samples/
 scripts/__pycache__/

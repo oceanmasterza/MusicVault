@@ -35,6 +35,7 @@ from musicvault.db.repositories.operation_repo import OperationRepository
 from musicvault.db.repositories.review_repo import ReviewRepository
 from musicvault.db.repositories.rule_repo import RuleRepository
 from musicvault.db.repositories.track_repo import TrackRepository
+from musicvault.db.repositories.trusted_folder_repo import TrustedFolderRepository
 from musicvault.db.writer import DatabaseWriter
 from musicvault.models.interfaces.artwork import ArtworkProvider
 from musicvault.models.interfaces.media_server import MediaServerPlugin
@@ -53,6 +54,7 @@ from musicvault.plugins.builtin.navidrome import NavidromePlugin
 from musicvault.plugins.builtin.plex import PlexPlugin
 from musicvault.plugins.builtin.subsonic import SubsonicPlugin
 from musicvault.plugins.manager import PluginManager
+from musicvault.services.folder_trust import FolderTrustService
 from musicvault.services.job_dispatcher import JobDispatcher
 from musicvault.services.job_queue_service import JobQueueService
 from musicvault.services.metadata_arbitrator import MetadataArbitrator
@@ -154,6 +156,7 @@ class Container:
         album_repo = AlbumRepository(engine)
         file_identity_repo = FileIdentityRepository(engine)
         metadata_confidence_repo = MetadataConfidenceRepository(engine)
+        trusted_folder_repo = TrustedFolderRepository(engine)
         event_bus = EventBus()
 
         database_writer = DatabaseWriter(
@@ -207,9 +210,38 @@ class Container:
             plugin_manager.get_metadata_providers(),
             confidence_threshold=config.metadata.confidence_threshold,
         )
+        musicbrainz = next(
+            (
+                provider
+                for provider in plugin_manager.get_metadata_providers()
+                if isinstance(provider, MusicBrainzProvider)
+            ),
+            None,
+        )
+        folder_trust = (
+            FolderTrustService(
+                trusted_folder_repo,
+                track_repo,
+                file_identity_repo,
+                album_repo,
+                musicbrainz,
+                job_queue,
+                job_repo,
+                sample_min=config.metadata.fingerprint_sample_min,
+            )
+            if musicbrainz is not None
+            else None
+        )
 
         scanner_worker = ScannerWorker(track_repo, file_identity_repo, database_writer, job_queue)
-        hash_worker = HashWorker(file_identity_repo, database_writer, job_queue)
+        hash_worker = HashWorker(
+            file_identity_repo,
+            database_writer,
+            job_queue,
+            track_repo=track_repo,
+            folder_trust=folder_trust,
+            fingerprint_mode=config.metadata.fingerprint_mode,
+        )
         fingerprint_worker = FingerprintWorker(file_identity_repo, database_writer, job_queue)
         metadata_worker = MetadataWorker(
             track_repo,
@@ -218,8 +250,18 @@ class Container:
             metadata_arbitrator,
             job_queue,
             review_queue,
+            artist_repo=artist_repo,
+            album_repo=album_repo,
+            folder_trust=folder_trust,
+            fingerprint_mode=config.metadata.fingerprint_mode,
         )
-        rule_worker = RuleWorker(track_repo, rules_engine, duplicate_repo, job_queue)
+        rule_worker = RuleWorker(
+            track_repo,
+            rules_engine,
+            duplicate_repo,
+            job_queue,
+            library_repo=library_repo,
+        )
         duplicate_worker = DuplicateWorker(
             track_repo,
             file_identity_repo,
@@ -227,6 +269,7 @@ class Container:
             duplicate_matcher,
             review_queue,
             job_queue,
+            album_repo=album_repo,
         )
         organizer_worker = OrganizerWorker(
             track_repo,
@@ -238,6 +281,7 @@ class Container:
             operation_repo,
             organize_engine,
             job_queue,
+            metadata_confidence_repo=metadata_confidence_repo,
         )
         artwork_worker = ArtworkWorker(
             track_repo,
@@ -249,6 +293,8 @@ class Container:
             artwork_dir=paths.cache_dir / "artwork",
             min_width=config.artwork.min_width,
             min_height=config.artwork.min_height,
+            artist_repo=artist_repo,
+            metadata_confidence_repo=metadata_confidence_repo,
         )
         report_worker = ReportWorker(report_service, job_queue)
         media_server_worker = MediaServerWorker(
@@ -342,10 +388,13 @@ class Container:
 def _build_metadata_providers(metadata: MetadataConfig) -> list[MetadataProvider]:
     """Construct enabled built-in metadata providers (explicit wiring —
     entry-point discovery stays a later phase)."""
+    import os
+
     enabled = set(metadata.enabled_providers)
     providers: list[MetadataProvider] = []
     if "acoustid" in enabled:
-        providers.append(AcoustIdProvider(api_key=metadata.acoustid_api_key or None))
+        api_key = metadata.acoustid_api_key or os.environ.get("MUSICVAULT_ACOUSTID_API_KEY", "")
+        providers.append(AcoustIdProvider(api_key=api_key or None))
     if "musicbrainz" in enabled:
         providers.append(MusicBrainzProvider())
     if "local_tags" in enabled:

@@ -42,6 +42,8 @@ class _StubProvider:
         return ProviderResult(
             provider_id=self.provider_id,
             fields=[
+                ProviderFieldResult("artist", "Stub Artist", 0.95),
+                ProviderFieldResult("album", "Stub Album", 0.94),
                 ProviderFieldResult("title", "Stub Title", 0.95),
                 ProviderFieldResult("year", 2001, 0.92),
                 ProviderFieldResult("genre", "Jazz", 0.91),
@@ -129,10 +131,10 @@ def test_execute_persists_arbitrated_fields_and_completes_job(
     assert updated.title == "Stub Title"
     assert updated.year == 2001
     assert updated.genre == "Jazz"
-    assert updated.overall_confidence == 0.91
+    assert updated.overall_confidence == 0.94
     assert updated.needs_review is False
     conf = MetadataConfidenceRepository(engine).list_for_track(track_id)
-    assert {c.field for c in conf} == {"title", "year", "genre"}
+    assert {c.field for c in conf} == {"artist", "album", "title", "year", "genre"}
     assert job_repo.get(job_id).status is JobStatus.COMPLETED  # type: ignore[union-attr]
     assert review_queue.get_pending(library_id) == []
     duplicate_jobs = [
@@ -354,3 +356,53 @@ def test_execute_creates_review_item_when_needs_review(
     assert pending[0].track_id == track_id
     assert pending[0].review_type is ReviewType.UNKNOWN_ARTIST
     assert review_repo.get(pending[0].id) is not None
+
+
+def test_execute_persists_artist_and_album_from_tags(
+    track_repo: TrackRepository,
+    file_identity_repo: FileIdentityRepository,
+    job_queue: JobQueueService,
+    job_repo: JobRepository,
+    review_queue: ReviewQueueService,
+    engine: Engine,
+    library_id: UUID,
+    track_id: UUID,
+) -> None:
+    from musicvault.db.repositories.album_repo import AlbumRepository
+    from musicvault.db.repositories.artist_repo import ArtistRepository
+
+    track_repo.upsert(_make_track(library_id, track_id))
+    job_id = job_queue.enqueue(
+        JobType.IDENTIFY_METADATA, library_id, {"track_id": str(track_id)}, now=_NOW
+    )
+    job_repo.update_status(job_id, JobStatus.RUNNING)
+    artists = ArtistRepository(engine)
+    albums = AlbumRepository(engine)
+
+    worker = MetadataWorker(
+        track_repo,
+        file_identity_repo,
+        MetadataConfidenceRepository(engine),
+        MetadataArbitrator([_StubProvider()], confidence_threshold=0.90),
+        job_queue,
+        review_queue,
+        artist_repo=artists,
+        album_repo=albums,
+    )
+    worker.execute(
+        Job(
+            id=job_id,
+            library_id=library_id,
+            job_type=JobType.IDENTIFY_METADATA,
+            status=JobStatus.RUNNING,
+            payload={"track_id": str(track_id)},
+            created_at=_NOW,
+        )
+    )
+
+    updated = track_repo.get_by_id(track_id)
+    assert updated is not None
+    assert updated.artist_id is not None
+    assert updated.album_id is not None
+    assert artists.get(updated.artist_id).name == "Stub Artist"  # type: ignore[union-attr]
+    assert albums.get(updated.album_id).title == "Stub Album"  # type: ignore[union-attr]

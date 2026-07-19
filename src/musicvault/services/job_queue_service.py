@@ -88,13 +88,27 @@ class JobQueueService:
     def mark_completed(self, job_id: UUID, *, now: datetime | None = None) -> None:
         self._jobs.update_status(job_id, JobStatus.COMPLETED, completed_at=_resolve_now(now))
 
-    def mark_failed(self, job_id: UUID, error: str, *, now: datetime | None = None) -> None:
+    def has_active_for_track(
+        self,
+        job_type: JobType,
+        library_id: UUID,
+        track_id: UUID,
+    ) -> bool:
+        """True when a pending/running/retry job of this type already targets the track."""
+        return self._jobs.has_active_for_track(library_id, job_type, track_id)
+
+    def mark_failed(
+        self, job_id: UUID, error: str, *, now: datetime | None = None, terminal: bool = False
+    ) -> None:
         """Record a worker failure. Schedules another attempt with
         exponential backoff (`delay = retry_base_delay_seconds *
         2**attempt_count`, capped at `retry_max_delay_seconds` — see
         `PipelineConfig`) while attempts remain, otherwise marks the job
         permanently `failed`. Distinct from :meth:`retry_failed`, which is
         a *manual* re-queue of an already-terminal job.
+
+        Pass ``terminal=True`` for non-retryable errors (missing file after
+        a move, etc.) so watch/scan storms do not burn three attempts each.
         """
         job = self._jobs.get(job_id)
         if job is None:
@@ -102,7 +116,7 @@ class JobQueueService:
 
         current_time = _resolve_now(now)
         next_attempt = job.attempt_count + 1
-        if next_attempt < job.max_attempts:
+        if (not terminal) and next_attempt < job.max_attempts:
             delay_seconds = min(
                 self._config.retry_base_delay_seconds * (2**job.attempt_count),
                 self._config.retry_max_delay_seconds,

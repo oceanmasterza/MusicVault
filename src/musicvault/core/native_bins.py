@@ -1,7 +1,10 @@
 """Locate bundled native helpers (fpcalc, …) for frozen and source runs.
 
-PyInstaller onedir ships verified binaries next to ``MusicVault.exe``
-(see ``packaging/musicvault.spec`` + ``packaging/vendor_manifest.json``).
+PyInstaller 6 onedir ships verified binaries under ``_internal/``
+(``sys._MEIPASS`` when frozen). Older layouts may place ``fpcalc.exe``
+next to ``MusicVault.exe``. See ``packaging/musicvault.spec`` and
+``packaging/vendor_manifest.json``.
+
 Dev checkouts may use ``tools/fpcalc.exe`` or ``packaging/vendor/fpcalc.exe``.
 
 Call :func:`configure_native_bin_path` once at process start so pyacoustid
@@ -30,11 +33,18 @@ def find_fpcalc() -> Path | None:
     if env:
         candidates.append(Path(env))
 
+    # Frozen onedir: binaries live in _MEIPASS (_internal) with PyInstaller 6+.
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "fpcalc.exe")
+        candidates.append(Path(meipass) / "fpcalc")
+
     app = application_dir()
     candidates.extend(
         [
             app / "fpcalc.exe",
             app / "fpcalc",
+            app / "_internal" / "fpcalc.exe",
             app / "tools" / "fpcalc.exe",
             app / "packaging" / "vendor" / "fpcalc.exe",
         ]

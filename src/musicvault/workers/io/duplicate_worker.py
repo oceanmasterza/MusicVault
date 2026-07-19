@@ -3,13 +3,16 @@
 I/O / DB-bound (Tier 2). Finds other tracks in the library sharing an
 exact matching key (content hash > Chromaprint hash > MusicBrainz
 recording ID), persists a duplicate group with quality-ranked members,
-creates a ``possible_duplicate`` review item linked to the group, then
-chains to `evaluate_rules` — so the rules engine sees the real
-``has_lossless_duplicate`` flag (docs/architecture/10-revision-v2.md:
-"Rules evaluate after metadata identification and duplicate detection").
+and either auto-keeps the highest-quality copy (confident tracks) or
+creates a ``possible_duplicate`` review item.
 
-Also the first writer of ``tracks.quality_score``: every track that
-joins a group gets scored and persisted.
+**Album policy:** fingerprint / MB recording matches only count when both
+tracks share the same album context (same release). The same song on two
+different albums is kept as two collection entries. Identical file bytes
+(``hash``) are always duplicates regardless of tags.
+
+Chains to `evaluate_rules` so the rules engine sees the real
+``has_lossless_duplicate`` flag.
 """
 
 from __future__ import annotations
@@ -18,14 +21,21 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID
 
+from musicvault.db.repositories.album_repo import AlbumRepository
 from musicvault.db.repositories.duplicate_repo import DuplicateRepository
 from musicvault.db.repositories.file_identity_repo import FileIdentityRepository
 from musicvault.db.repositories.track_repo import TrackRepository
 from musicvault.db.uuid_utils import generate_uuid7
-from musicvault.models.entities.duplicate_group import MatchType
+from musicvault.models.entities.duplicate_group import (
+    DuplicateMember,
+    GroupResolution,
+    GroupStatus,
+    MatchType,
+)
 from musicvault.models.entities.job import Job, JobType
 from musicvault.models.entities.review_item import ReviewType
-from musicvault.models.entities.track import Track
+from musicvault.models.entities.track import LibraryZone, Track
+from musicvault.models.services.album_context import same_album_context
 from musicvault.models.services.duplicate_matcher import DuplicateMatcher
 from musicvault.services.dto.review_dto import ReviewItemCreate
 from musicvault.services.job_queue_service import JobQueueService
@@ -33,6 +43,7 @@ from musicvault.services.review_queue_service import ReviewQueueService
 
 # Tier order: identical bytes beat identical audio beat same recording.
 _TIER_ORDER = (MatchType.HASH, MatchType.FINGERPRINT, MatchType.MBID)
+_AUTO_RESOLVE_THRESHOLD = 0.90
 
 
 class DuplicateWorker:
@@ -44,6 +55,8 @@ class DuplicateWorker:
         matcher: DuplicateMatcher,
         review_queue: ReviewQueueService,
         job_queue: JobQueueService,
+        *,
+        album_repo: AlbumRepository | None = None,
     ) -> None:
         self._tracks = track_repo
         self._identities = file_identity_repo
@@ -51,6 +64,7 @@ class DuplicateWorker:
         self._matcher = matcher
         self._reviews = review_queue
         self._job_queue = job_queue
+        self._albums = album_repo
 
     def execute(self, job: Job) -> None:
         track_id = UUID(job.payload["track_id"])
@@ -68,6 +82,7 @@ class DuplicateWorker:
             fingerprint_hash=identity.fingerprint_hash if identity else None,
             mb_recording_id=track.mb_recording_id,
         )
+        candidates = self._filter_by_album_policy(track, candidates)
 
         match_type = next((tier for tier in _TIER_ORDER if tier in candidates), None)
         if match_type is not None:
@@ -81,6 +96,27 @@ class DuplicateWorker:
             now=now,
         )
         self._job_queue.mark_completed(job.id)
+
+    def _filter_by_album_policy(
+        self,
+        track: Track,
+        candidates: dict[MatchType, list[UUID]],
+    ) -> dict[MatchType, list[UUID]]:
+        """Drop fingerprint/MBID hits that belong to a different album."""
+        filtered: dict[MatchType, list[UUID]] = {}
+        for match_type, track_ids in candidates.items():
+            if match_type is MatchType.HASH:
+                filtered[match_type] = track_ids
+                continue
+            same_album = [
+                other_id
+                for other_id in track_ids
+                if (other := self._tracks.get_by_id(other_id)) is not None
+                and same_album_context(track, other, self._albums)
+            ]
+            if same_album:
+                filtered[match_type] = same_album
+        return filtered
 
     def _persist_group(
         self,
@@ -108,6 +144,10 @@ class DuplicateWorker:
         self._duplicates.save_group(group, group_members)
 
         best = next(member for member in group_members if member.is_best)
+        if _ready_to_auto_keep_best(track):
+            self._auto_keep_best(library_id, group.id, group_members, now)
+            return
+
         self._reviews.create_item(
             ReviewItemCreate(
                 library_id=library_id,
@@ -130,6 +170,32 @@ class DuplicateWorker:
             now=now,
         )
 
+    def _auto_keep_best(
+        self,
+        library_id: UUID,
+        group_id: UUID,
+        members: list[DuplicateMember],
+        now: datetime,
+    ) -> None:
+        """Keep the highest-quality copy; archive the rest without Review."""
+        self._duplicates.set_status(
+            group_id,
+            GroupStatus.RESOLVED,
+            resolution=GroupResolution.KEPT_BEST,
+        )
+        for member in members:
+            if member.is_best:
+                continue
+            self._job_queue.enqueue(
+                JobType.ORGANIZE_FILE,
+                library_id,
+                {
+                    "track_id": str(member.track_id),
+                    "target_zone": LibraryZone.ARCHIVE.value,
+                },
+                now=now,
+            )
+
     def _ensure_quality_score(self, track: Track, now: datetime) -> Track:
         score = self._matcher.score(track)
         if track.quality_score == score:
@@ -137,3 +203,11 @@ class DuplicateWorker:
         updated = replace(track, quality_score=score, updated_at=now)
         self._tracks.upsert(updated)
         return updated
+
+
+def _ready_to_auto_keep_best(track: Track) -> bool:
+    if track.needs_review:
+        return False
+    if track.overall_confidence is None:
+        return False
+    return track.overall_confidence >= _AUTO_RESOLVE_THRESHOLD

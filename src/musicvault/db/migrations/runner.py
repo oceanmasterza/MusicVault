@@ -12,6 +12,7 @@ they go through this module instead, which builds an in-memory
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from alembic import command
@@ -21,7 +22,23 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from musicvault.core.exceptions import DatabaseError
 
-_MIGRATIONS_DIR = Path(__file__).parent
+
+def _migrations_dir() -> Path:
+    """Return the on-disk Alembic script tree.
+
+    PyInstaller packs ``.py`` modules into the PYZ archive, so
+    ``Path(__file__).parent`` is not a real directory when frozen. The
+    packaging spec copies ``musicvault/db/migrations`` into ``_MEIPASS``.
+    """
+    packaged = Path(__file__).resolve().parent
+    if packaged.is_dir() and (packaged / "env.py").is_file():
+        return packaged
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidate = Path(meipass) / "musicvault" / "db" / "migrations"
+        if candidate.is_dir() and (candidate / "env.py").is_file():
+            return candidate
+    return packaged
 
 
 def run_migrations(db_path: Path, *, revision: str = "head") -> None:
@@ -62,6 +79,6 @@ def downgrade_migrations(db_path: Path, revision: str) -> None:
 
 def _build_config(db_path: Path) -> Config:
     config = Config()
-    config.set_main_option("script_location", str(_MIGRATIONS_DIR))
+    config.set_main_option("script_location", str(_migrations_dir()))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
     return config

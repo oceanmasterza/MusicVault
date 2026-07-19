@@ -102,14 +102,22 @@ def test_resolve_picks_highest_confidence_per_field() -> None:
 def test_resolve_ties_break_by_provider_priority() -> None:
     a = ProviderResult(
         provider_id="musicbrainz",
-        fields=[ProviderFieldResult("title", "MB", 0.90)],
+        fields=[
+            ProviderFieldResult("artist", "A", 0.90),
+            ProviderFieldResult("album", "Alb", 0.90),
+            ProviderFieldResult("title", "MB", 0.90),
+        ],
         overall_confidence=0.90,
         lookup_method="tags",
         priority=10,
     )
     b = ProviderResult(
         provider_id="local_tags",
-        fields=[ProviderFieldResult("title", "Tags", 0.90)],
+        fields=[
+            ProviderFieldResult("artist", "A", 0.90),
+            ProviderFieldResult("album", "Alb", 0.90),
+            ProviderFieldResult("title", "Tags", 0.90),
+        ],
         overall_confidence=0.90,
         lookup_method="tags",
         priority=50,
@@ -128,7 +136,63 @@ def test_resolve_ties_break_by_provider_priority() -> None:
     assert result.needs_review is False
 
 
-def test_resolve_uses_acoustid_then_musicbrainz_by_id() -> None:
+def test_resolve_skips_acoustid_when_tags_already_strong() -> None:
+    local = ProviderResult(
+        provider_id="local_tags",
+        fields=[
+            ProviderFieldResult("artist", "Radiohead", 0.92),
+            ProviderFieldResult("album", "OK Computer", 0.92),
+            ProviderFieldResult("title", "Karma Police", 0.92),
+        ],
+        overall_confidence=0.92,
+        lookup_method="tags",
+        priority=50,
+    )
+    calls = {"fp": 0}
+
+    class _Acoustid:
+        provider_id = "acoustid"
+        priority = 5
+
+        def lookup_by_fingerprint(self, fingerprint: bytes, duration: float) -> None:
+            calls["fp"] += 1
+            return None
+
+        def lookup_by_tags(self, query: MetadataQuery) -> None:
+            return None
+
+        def lookup_by_id(self, external_id: str, id_type: str) -> None:
+            return None
+
+        def search(
+            self,
+            query: str,
+            entity_type: Literal["artist", "album", "recording"],
+            limit: int = 10,
+        ) -> list[ProviderResult]:
+            return []
+
+    arbitrator = MetadataArbitrator(
+        [_FakeProvider("local_tags", 50, by_tags=local), _Acoustid()],
+        confidence_threshold=0.90,
+    )
+    fingerprint = FingerprintData(fingerprint_data=b"fp", duration_seconds=120.0)
+
+    result = arbitrator.resolve(_track(), fingerprint)
+
+    assert calls["fp"] == 0
+    assert result.needs_review is False
+    assert result.fields["artist"].value == "Radiohead"
+
+
+def test_resolve_uses_acoustid_when_tags_are_weak() -> None:
+    weak = ProviderResult(
+        provider_id="local_tags",
+        fields=[ProviderFieldResult("title", "Maybe", 0.40)],
+        overall_confidence=0.40,
+        lookup_method="tags",
+        priority=50,
+    )
     mbid = str(generate_uuid7())
     acoustid = ProviderResult(
         provider_id="acoustid",
@@ -142,13 +206,18 @@ def test_resolve_uses_acoustid_then_musicbrainz_by_id() -> None:
     )
     by_id = ProviderResult(
         provider_id="musicbrainz",
-        fields=[ProviderFieldResult("title", "Resolved", 0.95)],
+        fields=[
+            ProviderFieldResult("artist", "Resolved Artist", 0.95),
+            ProviderFieldResult("album", "Resolved Album", 0.95),
+            ProviderFieldResult("title", "Resolved", 0.95),
+        ],
         overall_confidence=0.95,
         lookup_method="id",
         priority=10,
     )
     arbitrator = MetadataArbitrator(
         [
+            _FakeProvider("local_tags", 50, by_tags=weak),
             _FakeProvider("acoustid", 5, fingerprint=acoustid),
             _FakeProvider("musicbrainz", 10, by_id=by_id),
         ],
@@ -175,30 +244,97 @@ def test_resolve_empty_providers_marks_needs_review() -> None:
     assert result.track_id == track.id
 
 
-def test_resolve_overall_confidence_is_min_of_winners() -> None:
+def test_resolve_overall_confidence_uses_core_fields_only() -> None:
     tags = ProviderResult(
         provider_id="local_tags",
         fields=[
+            ProviderFieldResult("artist", "A", 0.92),
+            ProviderFieldResult("album", "B", 0.92),
             ProviderFieldResult("title", "T", 0.95),
             ProviderFieldResult("year", 2001, 0.70),
+            ProviderFieldResult("composer", "C", 0.65),
         ],
-        overall_confidence=0.70,
+        overall_confidence=0.65,
         lookup_method="tags",
         priority=50,
     )
-    arbitrator = MetadataArbitrator([_FakeProvider("local_tags", 50, by_tags=tags)])
+    arbitrator = MetadataArbitrator(
+        [_FakeProvider("local_tags", 50, by_tags=tags)],
+        confidence_threshold=0.90,
+    )
 
     result = arbitrator.resolve(_track())
 
-    assert result.overall_confidence == 0.70
+    assert result.overall_confidence == 0.92
+    assert result.needs_review is False
     assert isinstance(result.track_id, UUID)
+
+
+def test_resolve_seeds_musicbrainz_from_local_tags() -> None:
+    local = ProviderResult(
+        provider_id="local_tags",
+        fields=[
+            ProviderFieldResult("artist", "Radiohead", 0.92),
+            ProviderFieldResult("title", "Karma Police", 0.92),
+            ProviderFieldResult("album", "OK Computer", 0.92),
+        ],
+        overall_confidence=0.92,
+        lookup_method="tags",
+        priority=50,
+    )
+    mb_queries: list[MetadataQuery] = []
+
+    class _MB:
+        provider_id = "musicbrainz"
+        priority = 10
+
+        def lookup_by_fingerprint(self, fingerprint: bytes, duration: float) -> None:
+            return None
+
+        def lookup_by_tags(self, query: MetadataQuery) -> ProviderResult | None:
+            mb_queries.append(query)
+            return ProviderResult(
+                provider_id="musicbrainz",
+                fields=[ProviderFieldResult("mb_recording_id", "mbid-1", 0.95)],
+                overall_confidence=0.95,
+                lookup_method="tags",
+                priority=10,
+            )
+
+        def lookup_by_id(self, external_id: str, id_type: str) -> None:
+            return None
+
+        def search(
+            self,
+            query: str,
+            entity_type: Literal["artist", "album", "recording"],
+            limit: int = 10,
+        ) -> list[ProviderResult]:
+            return []
+
+    arbitrator = MetadataArbitrator(
+        [_FakeProvider("local_tags", 50, by_tags=local), _MB()],
+        confidence_threshold=0.90,
+    )
+
+    result = arbitrator.resolve(_track())
+
+    assert mb_queries
+    assert mb_queries[0].artist == "Radiohead"
+    assert mb_queries[0].title == "Karma Police"
+    assert result.fields["mb_recording_id"].value == "mbid-1"
+    assert result.needs_review is False
 
 
 def test_resolve_enrichment_looks_up_existing_mbid() -> None:
     mbid = str(generate_uuid7())
     by_id = ProviderResult(
         provider_id="musicbrainz",
-        fields=[ProviderFieldResult("title", "By Id", 0.95)],
+        fields=[
+            ProviderFieldResult("artist", "By Id Artist", 0.95),
+            ProviderFieldResult("album", "By Id Album", 0.95),
+            ProviderFieldResult("title", "By Id", 0.95),
+        ],
         overall_confidence=0.95,
         lookup_method="id",
         priority=10,

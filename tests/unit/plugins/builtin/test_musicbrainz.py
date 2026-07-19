@@ -18,7 +18,14 @@ def test_lookup_by_id_parses_recording() -> None:
             "id": mbid,
             "title": "Karma Police",
             "artist-credit": [{"name": "Radiohead"}],
-            "releases": [{"title": "OK Computer", "date": "1997-05-21"}],
+            "releases": [
+                {
+                    "id": "release-1",
+                    "title": "OK Computer",
+                    "date": "1997-05-21",
+                    "release-group": {"id": "rg-1"},
+                }
+            ],
         },
     )
     provider = MusicBrainzProvider()
@@ -32,7 +39,13 @@ def test_lookup_by_id_parses_recording() -> None:
     assert by_field["artist"] == "Radiohead"
     assert by_field["album"] == "OK Computer"
     assert by_field["year"] == 1997
+    assert by_field["mb_release_id"] == "release-1"
+    assert by_field["mb_release_group_id"] == "rg-1"
     assert result.lookup_method == "id"
+    assert (
+        min(f.confidence for f in result.fields if f.field in {"artist", "album", "title"})
+        >= 0.90
+    )
 
 
 @responses.activate

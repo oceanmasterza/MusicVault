@@ -5,7 +5,8 @@ docs/architecture/03-database-schema.md, plus the three artwork tables
 (``artwork``, ``track_artwork``, ``album_artwork``) whose column-level
 design was lost when the v1 schema document was superseded and which
 Phase 11 re-designed from scratch (see
-:mod:`musicvault.models.entities.artwork` for the design rationale).
+:mod:`musicvault.models.entities.artwork` for the design rationale),
+and ``trusted_folders`` for fingerprint sampling of album folders.
 Two more tables mentioned in that document (``plugin_state``,
 ``library_stats``) remain intentionally undefined until the phases that
 actually need them.
@@ -399,4 +400,18 @@ media_server_state = Table(
     Column("last_sync_at", Text),
     Column("last_sync_status", Text),
     Index("idx_media_server_state_library", "library_id"),
+)
+
+# Album-folder fingerprint sampling: once a folder is confirmed, remaining
+# siblings skip Chromaprint and identify from tags/filenames alone.
+trusted_folders = Table(
+    "trusted_folders",
+    metadata,
+    Column("library_id", LargeBinary(16), ForeignKey("libraries.id"), primary_key=True),
+    Column("folder_path", Text, primary_key=True),
+    Column("release_mbid", Text, nullable=False),
+    Column("official_track_count", Integer, nullable=False),
+    Column("sample_confirmed", Integer, nullable=False),
+    Column("trusted_at", Text, nullable=False),
+    Index("idx_trusted_folders_library", "library_id"),
 )

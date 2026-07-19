@@ -67,9 +67,10 @@ begin
            mbError, MB_OK);
     Result := False;
   end
-  else if not FileExists(ExpandConstant('{src}\..\dist\MusicVault\fpcalc.exe')) then
+  else if (not FileExists(ExpandConstant('{src}\..\dist\MusicVault\_internal\fpcalc.exe')))
+       and (not FileExists(ExpandConstant('{src}\..\dist\MusicVault\fpcalc.exe'))) then
   begin
-    MsgBox('dist\MusicVault\fpcalc.exe is missing.'#13#10 +
+    MsgBox('fpcalc.exe is missing from dist\MusicVault\ (or _internal).'#13#10 +
            'Run: python packaging\fetch_vendor.py then rebuild with PyInstaller.',
            mbError, MB_OK);
     Result := False;

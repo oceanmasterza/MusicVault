@@ -54,7 +54,7 @@ def test_create_sqlite_engine_applies_temp_store_memory(tmp_path: Path) -> None:
 def test_create_sqlite_engine_applies_busy_timeout(tmp_path: Path) -> None:
     engine = create_sqlite_engine(tmp_path / "test.db")
 
-    assert _pragma_value(engine, "busy_timeout") == 5000
+    assert _pragma_value(engine, "busy_timeout") == 30000
     engine.dispose()
 
 

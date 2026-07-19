@@ -342,11 +342,11 @@ def test_execute_fails_on_illegal_transition(
     job_repo: JobRepository,
     zone_library: Library,
 ) -> None:
-    source = _write_source(zone_library, "straight-to-library.flac")
-    track = _make_track(zone_library, source)
+    source = _write_source(zone_library, "already-library.flac", LibraryZone.LIBRARY)
+    track = _make_track(zone_library, source, zone=LibraryZone.LIBRARY)
     track_repo.upsert(track)
 
-    job_id = _run(worker, job_queue, job_repo, zone_library, track.id, "library")
+    job_id = _run(worker, job_queue, job_repo, zone_library, track.id, "staging")
 
     status = job_repo.get(job_id)
     assert status is not None

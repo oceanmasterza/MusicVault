@@ -1,19 +1,22 @@
 """MetadataArbitrator — multi-provider per-field confidence resolution.
 
 See docs/architecture/04-service-layer.md and docs/architecture/10-revision-v2.md
-("Metadata Arbitration"). Identification cascade (no MusicBrainz ID yet):
+("Metadata Arbitration"). Identification cascade (Picard-style):
 
-1. AcoustID fingerprint → MB recording ID
-2. MusicBrainz by ID / tags
-3. Local embedded tags
-4. Filename parser
+1. Local embedded tags
+2. MusicBrainz by existing recording ID / by tags (seeded from tags)
+3. Filename parser (only if core identity is still weak)
+4. AcoustID fingerprint → MusicBrainz by ID — **only when** tags/MB did not
+   already produce a strong identify (saves API quota on large libraries)
 
-Enrichment (MBID already present) prefers local tags then MusicBrainz fill-gaps.
+AcoustID itself enforces ≤ 3 requests/second. Overall confidence uses
+**core** fields only (artist, album, title).
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 
 from musicvault.models.entities.track import Track
 from musicvault.models.interfaces.metadata import (
@@ -33,6 +36,9 @@ _LOOKUP_METHOD_RANK = {
     "search": 4,
 }
 
+# Gate auto-approve / needs_review on identity fields only.
+_CORE_FIELDS = frozenset({"artist", "album", "title"})
+
 
 class MetadataArbitrator:
     def __init__(
@@ -46,11 +52,20 @@ class MetadataArbitrator:
         self._by_id = {p.provider_id: p for p in self._providers}
 
     def resolve(
-        self, track: Track, fingerprint: FingerprintData | None = None
+        self,
+        track: Track,
+        fingerprint: FingerprintData | None = None,
+        *,
+        force_acoustid: bool = False,
     ) -> ArbitrationResult:
         """Query enabled providers and pick the highest-confidence value
-        per field."""
-        results = self._query_providers(track, fingerprint)
+        per field.
+
+        ``force_acoustid`` is used by album-folder sampling: even strong
+        tags still run AcoustID until the folder is trusted, so the
+        sample confirmation count is real fingerprint evidence.
+        """
+        results = self._query_providers(track, fingerprint, force_acoustid=force_acoustid)
         fields = self._arbitrate_fields(results)
         if not fields:
             return ArbitrationResult(
@@ -60,23 +75,68 @@ class MetadataArbitrator:
                 needs_review=True,
                 provider_results=results,
             )
-        overall = min(item.confidence for item in fields.values())
+        overall = _core_overall(fields)
+        artist = fields.get("artist")
+        needs_review = (
+            artist is None
+            or not str(artist.value or "").strip()
+            or overall < self._threshold
+        )
         return ArbitrationResult(
             track_id=track.id,
             fields=fields,
             overall_confidence=overall,
-            needs_review=overall < self._threshold,
+            needs_review=needs_review,
             provider_results=results,
         )
 
     def _query_providers(
-        self, track: Track, fingerprint: FingerprintData | None
+        self,
+        track: Track,
+        fingerprint: FingerprintData | None,
+        *,
+        force_acoustid: bool = False,
     ) -> list[ProviderResult]:
         results: list[ProviderResult] = []
         query = _query_from_track(track)
-        has_mbid = bool(track.mb_recording_id)
 
-        if not has_mbid and fingerprint is not None:
+        # 1. Embedded tags — free, fast, seeds MusicBrainz search.
+        local = self._by_id.get("local_tags")
+        if local is not None:
+            tags_hit = local.lookup_by_tags(query)
+            if tags_hit is not None:
+                results.append(_with_priority(tags_hit, local.priority))
+                query = _enrich_query(query, tags_hit)
+
+        musicbrainz = self._by_id.get("musicbrainz")
+        if musicbrainz is not None:
+            # 2a. Already-known recording MBID.
+            if track.mb_recording_id:
+                by_id = musicbrainz.lookup_by_id(track.mb_recording_id, "recording")
+                if by_id is not None:
+                    results.append(_with_priority(by_id, musicbrainz.priority))
+                    query = _enrich_query(query, by_id)
+            # 2b. Tag search (artist + title required by the provider).
+            tags_hit = musicbrainz.lookup_by_tags(query)
+            if tags_hit is not None:
+                results.append(_with_priority(tags_hit, musicbrainz.priority))
+                query = _enrich_query(query, tags_hit)
+
+        # 3. Filename only when core identity is still weak.
+        if not _identity_is_strong(results, self._threshold):
+            filename = self._by_id.get("filename_parser")
+            if filename is not None:
+                tags_hit = filename.lookup_by_tags(query)
+                if tags_hit is not None:
+                    results.append(_with_priority(tags_hit, filename.priority))
+                    query = _enrich_query(query, tags_hit)
+
+        # 4. AcoustID — normally only when tags/MB did not settle identity;
+        #    sampling mode forces it until the album folder is trusted.
+        if fingerprint is not None and (
+            force_acoustid
+            or _should_use_acoustid(results, track=track, threshold=self._threshold)
+        ):
             acoustid = self._by_id.get("acoustid")
             if acoustid is not None:
                 hit = acoustid.lookup_by_fingerprint(
@@ -85,24 +145,10 @@ class MetadataArbitrator:
                 if hit is not None:
                     results.append(_with_priority(hit, acoustid.priority))
                     mbid = _field_value(hit, "mb_recording_id")
-                    if isinstance(mbid, str) and mbid:
-                        musicbrainz = self._by_id.get("musicbrainz")
-                        if musicbrainz is not None:
-                            by_id = musicbrainz.lookup_by_id(mbid, "recording")
-                            if by_id is not None:
-                                results.append(_with_priority(by_id, musicbrainz.priority))
-
-        for provider_id in ("musicbrainz", "local_tags", "filename_parser"):
-            provider = self._by_id.get(provider_id)
-            if provider is None:
-                continue
-            if provider_id == "musicbrainz" and track.mb_recording_id:
-                by_id = provider.lookup_by_id(track.mb_recording_id, "recording")
-                if by_id is not None:
-                    results.append(_with_priority(by_id, provider.priority))
-            tags_hit = provider.lookup_by_tags(query)
-            if tags_hit is not None:
-                results.append(_with_priority(tags_hit, provider.priority))
+                    if isinstance(mbid, str) and mbid and musicbrainz is not None:
+                        by_id = musicbrainz.lookup_by_id(mbid, "recording")
+                        if by_id is not None:
+                            results.append(_with_priority(by_id, musicbrainz.priority))
 
         return results
 
@@ -139,6 +185,45 @@ class MetadataArbitrator:
         return winners
 
 
+def _should_use_acoustid(
+    results: Sequence[ProviderResult],
+    *,
+    track: Track,
+    threshold: float,
+) -> bool:
+    """True when fingerprint lookup is still worth an AcoustID API call."""
+    if track.mb_recording_id:
+        return False
+    for result in results:
+        if isinstance(_field_value(result, "mb_recording_id"), str):
+            return False
+    return not _identity_is_strong(results, threshold)
+
+
+def _identity_is_strong(results: Sequence[ProviderResult], threshold: float) -> bool:
+    """Artist + title + album all present at or above the auto-approve gate."""
+    winners: dict[str, float] = {}
+    for result in results:
+        for field in result.fields:
+            if field.field not in _CORE_FIELDS:
+                continue
+            if field.value is None or field.value == "":
+                continue
+            prev = winners.get(field.field)
+            if prev is None or field.confidence > prev:
+                winners[field.field] = field.confidence
+    if not {"artist", "title", "album"}.issubset(winners):
+        return False
+    return min(winners.values()) >= threshold
+
+
+def _core_overall(fields: dict[str, FieldConfidence]) -> float:
+    core = [fields[name].confidence for name in _CORE_FIELDS if name in fields]
+    if core:
+        return min(core)
+    return min(item.confidence for item in fields.values())
+
+
 def _query_from_track(track: Track) -> MetadataQuery:
     return MetadataQuery(
         file_path=track.file_path,
@@ -148,6 +233,29 @@ def _query_from_track(track: Track) -> MetadataQuery:
         track_number=track.track_number,
         duration_ms=track.duration_ms,
     )
+
+
+def _enrich_query(query: MetadataQuery, result: ProviderResult) -> MetadataQuery:
+    """Fill empty query slots from a provider hit (local tags → MB search)."""
+    updates: dict[str, object] = {}
+    for field in result.fields:
+        if field.value is None or field.value == "":
+            continue
+        if field.field == "artist" and not query.artist and isinstance(field.value, str):
+            updates["artist"] = field.value
+        elif field.field == "album" and not query.album and isinstance(field.value, str):
+            updates["album"] = field.value
+        elif field.field == "title" and not query.title and isinstance(field.value, str):
+            updates["title"] = field.value
+        elif field.field == "year" and query.year is None and isinstance(field.value, int):
+            updates["year"] = field.value
+        elif (
+            field.field == "track_number"
+            and query.track_number is None
+            and isinstance(field.value, int)
+        ):
+            updates["track_number"] = field.value
+    return replace(query, **updates) if updates else query  # type: ignore[arg-type]
 
 
 def _field_value(result: ProviderResult, name: str) -> str | int | float | None:

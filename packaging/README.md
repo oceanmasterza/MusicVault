@@ -31,19 +31,42 @@ Or step by step:
 ```powershell
 python packaging/fetch_vendor.py
 pyinstaller packaging/musicvault.spec --noconfirm
-# optional:
-ISCC packaging\installer.iss
+# Installer (Inno if ISCC is installed; otherwise Python Setup.exe):
+python packaging/build_setup_exe.py
+# or: ISCC packaging\installer.iss
 ```
 
 Outputs:
 
 | Artifact | Path |
 |----------|------|
-| Portable app | `dist/MusicVault/` (`MusicVault.exe` + `fpcalc.exe` + deps) |
+| Portable app | `dist/MusicVault/` (`MusicVault.exe` + `_internal/fpcalc.exe` + deps) |
 | Installer | `packaging/output/MusicVault-Setup.exe` |
 
-The Inno script copies the **entire** `dist/MusicVault/` tree, so every
-bundled dependency is installed under `{app}`.
+Double-click **MusicVault-Setup.exe** — a **console window** shows live
+progress (one-file unpack can take ~30–60s before that appears). Installs
+under `%LOCALAPPDATA%\Programs\MusicVault` with:
+
+- Desktop + Start Menu shortcuts
+- **Uninstall.exe** in the install folder
+- Start Menu → MusicVault → **Uninstall MusicVault**
+- Registration in **Settings → Apps → Installed apps** (Apps & Features)
+
+A copy of the log is always written to `%TEMP%\MusicVault-Setup.log`.
+
+```powershell
+# Silent install
+MusicVault-Setup.exe --yes
+
+# Uninstall (keeps %APPDATA%\MusicVault user data)
+& "$env:LOCALAPPDATA\Programs\MusicVault\Uninstall.exe" --uninstall --yes
+
+# Uninstall and delete user data
+& "$env:LOCALAPPDATA\Programs\MusicVault\Uninstall.exe" --uninstall --yes --purge
+```
+
+The Inno script (when used) also copies the **entire** `dist/MusicVault/`
+tree under `{app}`.
 
 ## Online / repair download
 

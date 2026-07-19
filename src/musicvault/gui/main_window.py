@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from uuid import UUID
 
 from PySide6.QtCore import QTimer
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -13,22 +14,30 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMessageBox,
     QStackedWidget,
     QStatusBar,
     QVBoxLayout,
     QWidget,
 )
 
+from musicvault import __version__
 from musicvault.core.container import Container
 from musicvault.gui.bridge.qt_event_bridge import QtEventBridge
 from musicvault.gui.theme import apply_theme
+from musicvault.gui.views.dashboard_page import DashboardPage
 from musicvault.gui.views.duplicates_page import DuplicatesPage
 from musicvault.gui.views.jobs_page import JobsPage
 from musicvault.gui.views.library_page import LibraryPage
+from musicvault.gui.views.logs_page import LogsPage
 from musicvault.gui.views.review_page import ReviewPage
 from musicvault.gui.views.rules_page import RulesPage
 from musicvault.gui.views.settings_page import SettingsPage
 from musicvault.gui.views.stub_page import StubPage
+from musicvault.gui.widgets.desktop import open_path
+from musicvault.models.entities.job import JobType
+from musicvault.models.entities.library import Library
+from musicvault.models.entities.track import LibraryZone
 
 _NAV = (
     ("Dashboard", "dashboard"),
@@ -59,6 +68,8 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("MusicVault")
         self.resize(1200, 800)
+        # Allow smaller remote-desktop / laptop viewports; pages scroll instead of clipping.
+        self.setMinimumSize(720, 480)
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -70,6 +81,7 @@ class MainWindow(QMainWindow):
         top.setContentsMargins(12, 8, 12, 8)
         top.addWidget(QLabel("Library:"))
         self._library_combo = QComboBox()
+        self._library_combo.setToolTip("Active library — zone paths and jobs are scoped to this.")
         self._library_combo.currentIndexChanged.connect(self._on_library_changed)
         top.addWidget(self._library_combo, stretch=1)
         outer.addLayout(top)
@@ -85,6 +97,8 @@ class MainWindow(QMainWindow):
         outer.addLayout(body, stretch=1)
 
         self._pages: dict[str, QWidget] = {}
+        self._dashboard_page = DashboardPage(container)
+        self._dashboard_page.navigate_requested.connect(self._on_dashboard_navigate)
         self._review_page = ReviewPage(container)
         self._library_page = LibraryPage(container)
         self._jobs_page = JobsPage(container)
@@ -93,12 +107,11 @@ class MainWindow(QMainWindow):
         self._settings_page = SettingsPage(container)
         self._settings_page.library_saved.connect(self._on_library_saved)
         self._settings_page.preferences_saved.connect(self._on_theme_changed)
+        self._settings_page.scan_requested.connect(lambda: self._go_to("jobs"))
+        self._logs_page = LogsPage(container)
 
         page_builders: dict[str, QWidget] = {
-            "dashboard": StubPage(
-                "Dashboard",
-                "Pipeline overview will land here. Use Jobs and Review for live status.",
-            ),
+            "dashboard": self._dashboard_page,
             "library": self._library_page,
             "review": self._review_page,
             "artists": StubPage("Artists", "Artist browser deferred past the Phase 14 MVP."),
@@ -107,14 +120,16 @@ class MainWindow(QMainWindow):
             "jobs": self._jobs_page,
             "artwork": StubPage(
                 "Artwork",
-                "Artwork browser deferred — fetching runs in the pipeline.",
+                "Artwork browser UI is deferred. Cover fetch still runs in the pipeline "
+                "(embedded art + Cover Art Archive once a MusicBrainz release/recording "
+                "ID is known). Check Jobs for fetch_artwork, and Review for missing covers.",
             ),
             "reports": StubPage(
                 "Reports",
                 "Report generation is available via generate_report jobs; GUI viewer deferred.",
             ),
             "rules": self._rules_page,
-            "logs": StubPage("Logs", "Log viewer deferred — see AppPaths logs directory."),
+            "logs": self._logs_page,
             "settings": self._settings_page,
             "plugins": StubPage("Plugins", "Plugin manager UI deferred."),
         }
@@ -128,12 +143,14 @@ class MainWindow(QMainWindow):
             self._stack.addWidget(page)
 
         self._nav.currentRowChanged.connect(self._on_nav_changed)
-        self._nav.setCurrentRow(1)
+        self._nav.setCurrentRow(0)  # Dashboard home
 
         status = QStatusBar()
         self.setStatusBar(status)
         self._status_label = QLabel("Ready")
         status.addWidget(self._status_label, stretch=1)
+
+        self._build_menus()
 
         self._timer = QTimer(self)
         self._timer.setInterval(2000)
@@ -142,6 +159,158 @@ class MainWindow(QMainWindow):
 
         self.reload_libraries()
         self._tick()
+
+    def _build_menus(self) -> None:
+        file_menu = self.menuBar().addMenu("&File")
+        scan = QAction("Scan &Incoming", self)
+        scan.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        scan.setToolTip("Enqueue a scan of the active library’s Incoming folder.")
+        scan.triggered.connect(self._scan_incoming)
+        file_menu.addAction(scan)
+        file_menu.addSeparator()
+        open_incoming = QAction("Open Incoming Folder", self)
+        open_incoming.triggered.connect(self._open_incoming)
+        file_menu.addAction(open_incoming)
+        open_logs = QAction("Open &Log Folder", self)
+        open_logs.triggered.connect(lambda: open_path(self._container.paths.logs_dir))
+        file_menu.addAction(open_logs)
+        open_data = QAction("Open &Data Folder", self)
+        open_data.triggered.connect(lambda: open_path(self._container.paths.root))
+        file_menu.addAction(open_data)
+        file_menu.addSeparator()
+        quit_action = QAction("&Quit", self)
+        quit_action.setShortcut(QKeySequence.StandardKey.Quit)
+        quit_action.triggered.connect(self.close)
+        file_menu.addAction(quit_action)
+
+        view_menu = self.menuBar().addMenu("&View")
+        go_dash = QAction("&Dashboard", self)
+        go_dash.setShortcut(QKeySequence("Ctrl+D"))
+        go_dash.triggered.connect(lambda: self._go_to("dashboard"))
+        view_menu.addAction(go_dash)
+        go_library = QAction("&Library", self)
+        go_library.setShortcut(QKeySequence("Ctrl+L"))
+        go_library.triggered.connect(lambda: self._go_to("library"))
+        view_menu.addAction(go_library)
+        go_review = QAction("&Review", self)
+        go_review.setShortcut(QKeySequence("Ctrl+R"))
+        go_review.triggered.connect(lambda: self._go_to("review"))
+        view_menu.addAction(go_review)
+        go_jobs = QAction("&Jobs", self)
+        go_jobs.setShortcut(QKeySequence("Ctrl+J"))
+        go_jobs.triggered.connect(lambda: self._go_to("jobs"))
+        view_menu.addAction(go_jobs)
+        go_settings = QAction("&Settings", self)
+        go_settings.setShortcut(QKeySequence("Ctrl+,"))
+        go_settings.triggered.connect(lambda: self._go_to("settings"))
+        view_menu.addAction(go_settings)
+        view_menu.addSeparator()
+        refresh = QAction("&Refresh", self)
+        refresh.setShortcut(QKeySequence.StandardKey.Refresh)
+        refresh.triggered.connect(self._refresh_current)
+        view_menu.addAction(refresh)
+
+        help_menu = self.menuBar().addMenu("&Help")
+        about = QAction("&About MusicVault", self)
+        about.triggered.connect(self._about)
+        help_menu.addAction(about)
+        uninstall = QAction("&Uninstall MusicVault…", self)
+        uninstall.setToolTip("Remove the installed application via Windows Apps & Features.")
+        uninstall.triggered.connect(self._uninstall)
+        help_menu.addAction(uninstall)
+
+    def _on_dashboard_navigate(self, key: str) -> None:
+        if key == "scan":
+            self._scan_incoming()
+            return
+        self._go_to(key)
+
+    def _go_to(self, key: str) -> None:
+        if key not in self._nav_keys:
+            return
+        self._nav.setCurrentRow(self._nav_keys.index(key))
+
+    def _refresh_current(self) -> None:
+        index = self._nav.currentRow()
+        self._on_nav_changed(index)
+
+    def _current_library(self) -> Library | None:
+        if self._library_id is None:
+            return None
+        return self._container.library_repo.get(self._library_id)
+
+    def _scan_incoming(self) -> None:
+        library = self._current_library()
+        if library is None:
+            QMessageBox.warning(self, "MusicVault", "Create or select a library in Settings first.")
+            self._go_to("settings")
+            return
+        stats = self._container.job_queue.get_stats(library.id)
+        if stats.by_type.get(JobType.SCAN_DIRECTORY.value, 0) > 0:
+            QMessageBox.information(self, "MusicVault", "A scan is already queued.")
+            self._go_to("jobs")
+            return
+        self._container.job_queue.enqueue(
+            JobType.SCAN_DIRECTORY,
+            library.id,
+            {
+                "directory": library.incoming_path,
+                "zone": LibraryZone.INCOMING.value,
+            },
+        )
+        self._go_to("jobs")
+        self._jobs_page.refresh()
+        self.statusBar().showMessage(f"Scan queued: {library.incoming_path}", 5000)
+
+    def _open_incoming(self) -> None:
+        library = self._current_library()
+        if library is None:
+            QMessageBox.warning(self, "MusicVault", "No library selected.")
+            return
+        open_path(library.incoming_path)
+
+    def _about(self) -> None:
+        QMessageBox.about(
+            self,
+            "About MusicVault",
+            f"<h3>MusicVault {__version__}</h3>"
+            f"<p>Data folder:<br><code>{self._container.paths.root}</code></p>"
+            f"<p>Logs:<br><code>{self._container.paths.logs_dir}</code></p>",
+        )
+
+    def _uninstall(self) -> None:
+        """Launch the Windows uninstaller when running from an installed copy."""
+        import sys
+        from pathlib import Path
+
+        candidates = [
+            Path(sys.executable).resolve().parent / "Uninstall.exe",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "MusicVault" / "Uninstall.exe",
+        ]
+        uninstall = next((p for p in candidates if p.is_file()), None)
+        if uninstall is None:
+            QMessageBox.information(
+                self,
+                "Uninstall MusicVault",
+                "No installer registration was found.\n\n"
+                "If you installed with MusicVault-Setup.exe, use:\n"
+                "Settings → Apps → Installed apps → MusicVault → Uninstall\n"
+                "or Start Menu → MusicVault → Uninstall MusicVault.",
+            )
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "Uninstall MusicVault",
+                "This will close MusicVault and open the uninstaller.\n\nContinue?",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        import subprocess
+
+        subprocess.Popen([str(uninstall), "--uninstall"], cwd=str(uninstall.parent))
+        self.close()
 
     def reload_libraries(self) -> None:
         current = self._library_id
@@ -170,7 +339,9 @@ class MainWindow(QMainWindow):
         if index < 0 or index >= len(self._nav_keys):
             return
         key = self._nav_keys[index]
-        if key == "review":
+        if key == "dashboard":
+            self._dashboard_page.refresh()
+        elif key == "review":
             self._review_page.refresh()
             self._update_review_badge()
         elif key == "jobs":
@@ -181,6 +352,8 @@ class MainWindow(QMainWindow):
             self._duplicates_page.refresh()
         elif key == "rules":
             self._rules_page.refresh()
+        elif key == "settings":
+            self._settings_page.refresh()
 
     def _on_library_changed(self, _index: int) -> None:
         self._set_library(self._library_combo.currentData())
@@ -188,6 +361,7 @@ class MainWindow(QMainWindow):
     def _set_library(self, library_id: UUID | None) -> None:
         self._library_id = library_id
         for page in (
+            self._dashboard_page,
             self._library_page,
             self._review_page,
             self._jobs_page,
@@ -235,8 +409,10 @@ class MainWindow(QMainWindow):
             f"{stats.failed} failed · Review: {review}"
         )
         self._update_review_badge()
-        # Full table rebuilds are event/page-driven — not on every poll —
-        # so selection and scroll position stay stable while the user works.
+        # Keep Dashboard live while it is visible (status-bar cadence).
+        row = self._nav.currentRow()
+        if self._nav_keys and 0 <= row < len(self._nav_keys) and self._nav_keys[row] == "dashboard":
+            self._dashboard_page.refresh()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt naming
         self._timer.stop()

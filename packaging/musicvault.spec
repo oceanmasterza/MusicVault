@@ -26,6 +26,10 @@ hiddenimports = [
     "musicvault.__main__",
     "musicvault.gui.app",
     "musicvault.gui.main_window",
+    "logging.config",
+    "alembic",
+    "alembic.runtime.migration",
+    "alembic.runtime.environment",
 ]
 
 # Pinned native helpers (see packaging/vendor_manifest.json).
@@ -35,6 +39,10 @@ if not _fpcalc.is_file():
         f"Missing {_fpcalc}. Run: python packaging/fetch_vendor.py"
     )
 binaries.append((str(_fpcalc), "."))
+
+# Alembic needs the migrations tree on disk (not only inside the PYZ).
+_migrations = SRC / "musicvault" / "db" / "migrations"
+datas.append((str(_migrations), "musicvault/db/migrations"))
 
 pyside_datas, pyside_binaries, pyside_hidden = collect_all("PySide6")
 datas += pyside_datas

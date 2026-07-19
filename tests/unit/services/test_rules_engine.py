@@ -238,8 +238,10 @@ def test_illegal_move_to_zone_parks_a_review_item_instead(
     library_id: UUID,
     track_id: UUID,
 ) -> None:
-    _move_rule(wired_rules_engine, library_id, "library")  # incoming -> library is illegal
-    track = _make_track(library_id, track_id, codec="mp3", file_name="x.mp3")
+    _move_rule(wired_rules_engine, library_id, "staging")  # library -> staging is illegal
+    track = _make_track(
+        library_id, track_id, codec="mp3", file_name="x.mp3", zone=LibraryZone.LIBRARY
+    )
     track_repo.upsert(track)
 
     matches = wired_rules_engine.evaluate(track, wired_rules_engine.build_context(track))

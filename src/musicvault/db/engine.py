@@ -21,7 +21,7 @@ from sqlalchemy import Engine, create_engine, event
 _MMAP_CEILING_BYTES = 30 * 1024**3  # 30 GB — matches the reviewed recommendation's cap
 _MMAP_FLOOR_BYTES = 256 * 1024**2  # 256 MB — never mmap less than this
 _MMAP_RAM_FRACTION = 0.25
-_BUSY_TIMEOUT_MS = 5000
+_BUSY_TIMEOUT_MS = 30_000
 _CACHE_SIZE_KIB = -64000  # negative value = KiB of page cache, not a page count
 
 _STATIC_PRAGMAS = (
@@ -66,6 +66,10 @@ def create_sqlite_engine(db_path: Path, *, echo: bool = False) -> Engine:
     enforcement, and the rest of MusicVault's PRAGMA configuration
     applied automatically.
     """
-    engine = create_engine(f"sqlite:///{db_path}", echo=echo)
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        echo=echo,
+        connect_args={"timeout": 30.0},
+    )
     event.listen(engine, "connect", _configure_sqlite_connection)
     return engine

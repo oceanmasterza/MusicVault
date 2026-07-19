@@ -22,9 +22,18 @@ Write-Host "==> PyInstaller onedir"
 pyinstaller packaging/musicvault.spec --noconfirm
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-$fpcalc = "dist\MusicVault\fpcalc.exe"
-if (-not (Test-Path $fpcalc)) {
-    Write-Error "Build missing $fpcalc — vendor binary was not collected"
+$fpcalc = $null
+foreach ($candidate in @(
+        "dist\MusicVault\_internal\fpcalc.exe",
+        "dist\MusicVault\fpcalc.exe"
+    )) {
+    if (Test-Path $candidate) {
+        $fpcalc = $candidate
+        break
+    }
+}
+if (-not $fpcalc) {
+    Write-Error "Build missing fpcalc.exe under dist\MusicVault\ - vendor binary was not collected"
     exit 1
 }
 Write-Host "Verified bundled $fpcalc"
@@ -42,7 +51,9 @@ if (-not $SkipInstaller) {
         Write-Host "Installer: packaging\output\MusicVault-Setup.exe"
     }
     else {
-        Write-Warning "ISCC not found — skipped installer (onedir is still in dist\MusicVault\)"
+        Write-Host "==> Python Setup.exe (ISCC not found)"
+        python packaging/build_setup_exe.py
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
 }
 

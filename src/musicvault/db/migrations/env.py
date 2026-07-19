@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from logging.config import fileConfig
-
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 from sqlalchemy.engine import Engine
@@ -12,9 +10,11 @@ from musicvault.db.tables import metadata as target_metadata
 # access to the values within the .ini file in use.
 config = context.config
 
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
+# Interpret the config file for Python logging (CLI / alembic.ini only).
+# Programmatic runs via runner.py pass no ini file, so skip this.
 if config.config_file_name is not None:
+    from logging.config import fileConfig
+
     fileConfig(config.config_file_name)
 
 # `target_metadata` (imported above) drives --autogenerate. The

@@ -3,18 +3,22 @@
 Bootstraps the application, then either launches the Qt GUI (default) or
 exits after a headless readiness check when ``--headless`` is passed or
 ``MUSICVAULT_HEADLESS=1`` is set (CI / automation).
+
+Frozen Windows builds **must** call ``multiprocessing.freeze_support()``
+before any other work: ``ProcessPoolExecutor`` workers re-launch this
+executable, and without ``freeze_support`` they re-enter :func:`main`,
+fight over SQLite, and can spam hundreds of error dialogs.
 """
 
 from __future__ import annotations
 
+import multiprocessing
 import os
 import sys
-
-from loguru import logger
+import traceback
 
 from musicvault import __version__
-from musicvault.app import bootstrap
-from musicvault.core.exceptions import MusicVaultError
+from musicvault.core.single_instance import SingleInstanceLock, is_main_process
 
 
 def _wants_headless(argv: list[str]) -> bool:
@@ -24,35 +28,81 @@ def _wants_headless(argv: list[str]) -> bool:
     return flag in {"1", "true", "yes"}
 
 
+def _report_startup_failure(message: str) -> None:
+    """Show a failure once, only from the real main process."""
+    if not is_main_process():
+        return
+    if sys.stderr is not None:
+        print(message, file=sys.stderr)
+    # Never MessageBox from workers / secondary instances — that caused the
+    # desktop-freezing dialog storm when SQLite locked under process spam.
+    if getattr(sys, "frozen", False) and os.environ.get("MUSICVAULT_HEADLESS", "").strip() == "":
+        try:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(None, message[:2000], "MusicVault", 0x10)
+        except Exception:
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
     """Bootstrap MusicVault and launch the GUI (or headless check).
 
     Returns:
         Process exit code: ``0`` on success, ``1`` if bootstrap fails.
     """
-    args = list(sys.argv[1:] if argv is None else argv)
-    print(f"MusicVault {__version__}")
-    try:
-        container = bootstrap()
-    except MusicVaultError as exc:
-        print(f"Failed to start MusicVault: {exc}", file=sys.stderr)
-        return 1
-
-    if _wants_headless(args):
-        try:
-            logger.info(
-                "MusicVault {} ready (headless; data directory: {})",
-                __version__,
-                container.paths.root,
-            )
-        finally:
-            container.close()
+    # Defensive: never bootstrap from a multiprocessing worker.
+    if not is_main_process():
         return 0
 
-    from musicvault.gui.app import run_gui
+    from loguru import logger
 
-    return run_gui(container)
+    from musicvault.app import bootstrap
+    from musicvault.core.exceptions import MusicVaultError
+
+    args = list(sys.argv[1:] if argv is None else argv)
+    if sys.stdout is not None:
+        print(f"MusicVault {__version__}")
+
+    with SingleInstanceLock() as lock:
+        if not lock.acquired:
+            msg = (
+                "MusicVault is already running.\n\n"
+                "Only one instance can use the library database at a time."
+            )
+            if sys.stderr is not None:
+                print(msg, file=sys.stderr)
+            # Quiet exit for secondary launches — no MessageBox storm.
+            return 0
+
+        try:
+            container = bootstrap()
+        except MusicVaultError as exc:
+            _report_startup_failure(f"Failed to start MusicVault:\n{exc}")
+            return 1
+        except Exception as exc:
+            _report_startup_failure(
+                f"Failed to start MusicVault:\n{exc}\n\n{traceback.format_exc()}"
+            )
+            return 1
+
+        if _wants_headless(args):
+            try:
+                logger.info(
+                    "MusicVault {} ready (headless; data directory: {})",
+                    __version__,
+                    container.paths.root,
+                )
+            finally:
+                container.close()
+            return 0
+
+        from musicvault.gui.app import run_gui
+
+        return run_gui(container)
 
 
 if __name__ == "__main__":
+    # REQUIRED for PyInstaller + ProcessPoolExecutor on Windows.
+    multiprocessing.freeze_support()
     sys.exit(main())

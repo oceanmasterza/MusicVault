@@ -13,9 +13,9 @@ jobs) when ``job_queue`` is wired:
 - approving a ``possible_duplicate`` item resolves the duplicate group
   as ``kept_best`` and archives the non-best members whose zone allows
   it;
-- approving any other track-linked item promotes a *staging* track to
-  the library (tracks still in incoming are promoted by the pipeline's
-  own organize step first).
+- approving any other track-linked item promotes an *incoming* or
+  *staging* track straight to the library (originals stay in incoming
+  until confirmation).
 
 When ``job_queue`` is not provided (lightweight test setups), approval
 only resolves the item and clears ``needs_review`` — the Phase 7
@@ -152,7 +152,7 @@ class ReviewQueueService:
             ReviewItemCreate(
                 library_id=library_id,
                 review_type=review_type,
-                title=_TITLE_BY_TYPE.get(review_type, "Needs review"),
+                title=_display_title(result, review_type),
                 track_id=track_id,
                 description=_describe(result, review_type),
                 confidence=result.overall_confidence,
@@ -265,7 +265,7 @@ class ReviewQueueService:
         if item.review_type is ReviewType.POSSIBLE_DUPLICATE:
             self._resolve_duplicate_group(item, now)
             return
-        self._promote_staging_track(item.track_id, item.library_id, now)
+        self._promote_to_library(item.track_id, item.library_id, now)
 
     def _execute_parked_moves(self, item: ReviewItem, now: datetime) -> None:
         for zone in _parked_move_zones(item.payload or {}):
@@ -274,10 +274,8 @@ class ReviewQueueService:
     def _resolve_duplicate_group(self, item: ReviewItem, now: datetime) -> None:
         """Keep the best copy; archive the other members where legal.
 
-        After archiving losers, promote the best copy from staging → library
-        when it has no remaining pending review items (otherwise a
-        duplicate approval as the *last* review left the keeper stuck in
-        staging forever).
+        After archiving losers, promote the best copy to library when it
+        has no remaining pending review items.
         """
         if self._duplicates is None or item.duplicate_group_id is None:
             return
@@ -292,23 +290,24 @@ class ReviewQueueService:
                 continue
             self._enqueue_move_if_legal(item.library_id, member.track_id, LibraryZone.ARCHIVE, now)
         if best_track_id is not None:
-            self._promote_staging_track(best_track_id, item.library_id, now)
+            self._promote_to_library(best_track_id, item.library_id, now)
 
-    def _promote_staging_track(
+    def _promote_to_library(
         self, track_id: UUID | None, library_id: UUID, now: datetime
     ) -> None:
-        """Promote a staging track to the library when its review backlog is clear.
+        """Move Incoming or Staging → Library when the review backlog is clear.
 
-        Tracks still in incoming are left alone — the pipeline's own
-        organize step moves them to staging first, and auto-approve or a
-        later approval promotes them from there.
+        Originals stay in Incoming until approval (or auto-approve from
+        RuleWorker); Staging is still promoted for legacy/manual holds.
         """
         if track_id is None:
             return
         if self._reviews.list_pending_for_track(track_id):
             return
         track = self._tracks.get_by_id(track_id)
-        if track is None or track.zone is not LibraryZone.STAGING:
+        if track is None:
+            return
+        if track.zone not in (LibraryZone.INCOMING, LibraryZone.STAGING):
             return
         self._enqueue_move_if_legal(library_id, track_id, LibraryZone.LIBRARY, now)
 
@@ -375,6 +374,27 @@ def classify_review_type(result: ArbitrationResult, threshold: float) -> ReviewT
     return ReviewType.UNKNOWN_ARTIST
 
 
+def _display_title(result: ArbitrationResult, review_type: ReviewType) -> str:
+    """Human-readable track label for the Review table Title column."""
+    artist = _field_str(result, "artist")
+    title = _field_str(result, "title")
+    if artist and title:
+        return f"{artist} — {title}"
+    if title:
+        return title
+    if artist:
+        return artist
+    return _TITLE_BY_TYPE.get(review_type, "Needs review")
+
+
+def _field_str(result: ArbitrationResult, name: str) -> str | None:
+    item = result.fields.get(name)
+    if item is None or not isinstance(item.value, str):
+        return None
+    value = item.value.strip()
+    return value or None
+
+
 def _has_provider_conflict(result: ArbitrationResult, *, gap: float) -> bool:
     by_field: dict[str, list[tuple[object, float]]] = defaultdict(list)
     for provider in result.provider_results:
@@ -394,18 +414,23 @@ def _has_provider_conflict(result: ArbitrationResult, *, gap: float) -> bool:
 
 
 def _describe(result: ArbitrationResult, review_type: ReviewType) -> str:
+    reason = _TITLE_BY_TYPE.get(review_type, "Needs review")
     overall = f"Overall confidence {result.overall_confidence:.2f}"
     if review_type is ReviewType.METADATA_CONFLICT:
-        return f"{overall}; providers disagree on one or more fields"
-    if review_type is ReviewType.UNKNOWN_ALBUM:
+        detail = f"{overall}; providers disagree on one or more fields"
+    elif review_type is ReviewType.UNKNOWN_ALBUM:
         album = result.fields.get("album")
         if album is None:
-            return f"{overall}; album missing"
-        return f"{overall}; album confidence {album.confidence:.2f}"
-    artist = result.fields.get("artist")
-    if artist is None:
-        return f"{overall}; artist missing"
-    return f"{overall}; artist confidence {artist.confidence:.2f}"
+            detail = f"{overall}; album missing"
+        else:
+            detail = f"{overall}; album confidence {album.confidence:.2f}"
+    else:
+        artist = result.fields.get("artist")
+        if artist is None:
+            detail = f"{overall}; artist missing"
+        else:
+            detail = f"{overall}; artist confidence {artist.confidence:.2f}"
+    return f"{reason}. {detail}"
 
 
 def _payload_from_result(result: ArbitrationResult) -> dict[str, Any]:

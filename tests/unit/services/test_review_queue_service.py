@@ -321,6 +321,8 @@ def test_create_from_arbitration_classifies_unknown_artist(
     assert len(pending) == 1
     assert pending[0].id == review_id
     assert pending[0].review_type is ReviewType.UNKNOWN_ARTIST
+    assert pending[0].title == "Song"
+    assert "Unknown or low-confidence artist" in (pending[0].description or "")
 
 
 def test_classify_review_type_prefers_album_then_conflict() -> None:
@@ -459,14 +461,14 @@ def test_approve_rule_action_skips_illegal_parked_move(
     library_id: UUID,
     track_id: UUID,
 ) -> None:
-    track_repo.upsert(_make_track(library_id, track_id, zone=LibraryZone.INCOMING))
+    track_repo.upsert(_make_track(library_id, track_id, zone=LibraryZone.LIBRARY))
     review_id = wired_review_queue.create_item(
         ReviewItemCreate(
             library_id=library_id,
             review_type=ReviewType.RULE_ACTION,
-            title="Rule wants zone 'library'",
+            title="Rule wants zone 'staging'",
             track_id=track_id,
-            payload={"rule_id": "x", "action_type": "move_to_zone", "zone": "library"},
+            payload={"rule_id": "x", "action_type": "move_to_zone", "zone": "staging"},
         ),
         now=_NOW,
     )
@@ -501,7 +503,7 @@ def test_approve_metadata_item_promotes_staging_track_to_library(
     ]
 
 
-def test_approve_metadata_item_leaves_incoming_track_to_the_pipeline(
+def test_approve_metadata_item_promotes_incoming_track_to_library(
     wired_review_queue: ReviewQueueService,
     track_repo: TrackRepository,
     job_repo: JobRepository,
@@ -521,7 +523,9 @@ def test_approve_metadata_item_leaves_incoming_track_to_the_pipeline(
 
     wired_review_queue.approve(review_id, now=_NOW)
 
-    assert _pending_organize_jobs(job_repo) == []
+    assert _pending_organize_jobs(job_repo) == [
+        {"track_id": str(track_id), "target_zone": "library"}
+    ]
 
 
 def test_approve_with_edits_also_runs_post_approve_moves(

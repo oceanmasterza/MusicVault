@@ -101,6 +101,68 @@ QLabel[heading="true"] {
     font-weight: 600;
     padding-bottom: 4px;
 }
+QLabel[muted="true"] {
+    color: #9a9a9a;
+}
+QLabel[kpiValue="true"] {
+    font-size: 28px;
+    font-weight: 700;
+}
+QLabel[panelTitle="true"] {
+    font-size: 14px;
+    font-weight: 600;
+}
+QLabel[insight="true"] {
+    background-color: #252526;
+    border: 1px solid #3c3c3c;
+    border-radius: 4px;
+    padding: 10px 12px;
+}
+QLabel[stageTitle="true"] {
+    font-size: 11px;
+    font-weight: 600;
+}
+QLabel[stageCount="true"] {
+    font-size: 20px;
+    font-weight: 700;
+}
+QFrame[kpiCard="true"] {
+    background-color: #252526;
+    border: 1px solid #3c3c3c;
+    border-radius: 6px;
+    min-width: 110px;
+}
+QFrame[dashPanel="true"] {
+    background-color: #252526;
+    border: 1px solid #3c3c3c;
+    border-radius: 6px;
+    padding: 4px;
+}
+QFrame[pipelineStage="true"] {
+    background-color: #2d2d2d;
+    border: 1px solid #3c3c3c;
+    border-radius: 6px;
+    min-width: 72px;
+}
+QFrame[pipelineStage="true"][activeStage="true"] {
+    border: 1px solid #0e639c;
+}
+QFrame[pipelineStage="true"][bottleneck="true"] {
+    border: 1px solid #d7ba7d;
+    background-color: #3a3420;
+}
+QProgressBar {
+    background-color: #1e1e1e;
+    border: 1px solid #3c3c3c;
+    border-radius: 3px;
+    height: 8px;
+    max-height: 10px;
+    text-align: center;
+}
+QProgressBar::chunk {
+    background-color: #0e639c;
+    border-radius: 2px;
+}
 QScrollBar:vertical {
     background: #1e1e1e;
     width: 10px;
@@ -140,6 +202,25 @@ QStatusBar {
 QLabel[heading="true"] {
     font-size: 18px;
     font-weight: 600;
+}
+QLabel[muted="true"] {
+    color: #666666;
+}
+QLabel[kpiValue="true"] {
+    font-size: 28px;
+    font-weight: 700;
+}
+QFrame[kpiCard="true"], QFrame[dashPanel="true"] {
+    background-color: #ffffff;
+    border: 1px solid #d0d0d0;
+    border-radius: 6px;
+}
+QFrame[pipelineStage="true"][bottleneck="true"] {
+    border: 1px solid #b8952e;
+    background-color: #fff8e4;
+}
+QProgressBar::chunk {
+    background-color: #0078d4;
 }
 """
 

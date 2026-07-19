@@ -56,6 +56,7 @@ def engine() -> OrganizeEngine:
 
 class TestTransitions:
     def test_documented_transitions_are_allowed(self, engine: OrganizeEngine) -> None:
+        assert engine.can_transition(LibraryZone.INCOMING, LibraryZone.LIBRARY)
         assert engine.can_transition(LibraryZone.INCOMING, LibraryZone.STAGING)
         assert engine.can_transition(LibraryZone.STAGING, LibraryZone.LIBRARY)
         assert engine.can_transition(LibraryZone.STAGING, LibraryZone.INCOMING)
@@ -68,7 +69,6 @@ class TestTransitions:
         assert engine.can_transition(LibraryZone.STAGING, LibraryZone.ARCHIVE)
 
     def test_forbidden_transitions(self, engine: OrganizeEngine) -> None:
-        assert not engine.can_transition(LibraryZone.INCOMING, LibraryZone.LIBRARY)
         assert not engine.can_transition(LibraryZone.LIBRARY, LibraryZone.STAGING)
         assert not engine.can_transition(LibraryZone.LIBRARY, LibraryZone.INCOMING)
         assert not engine.can_transition(LibraryZone.ARCHIVE, LibraryZone.STAGING)
@@ -78,8 +78,8 @@ class TestTransitions:
         assert set(ALLOWED_TRANSITIONS) == set(LibraryZone)
 
     def test_validate_transition_raises_with_allowed_list(self, engine: OrganizeEngine) -> None:
-        with pytest.raises(ValueError, match="incoming -> library"):
-            engine.validate_transition(LibraryZone.INCOMING, LibraryZone.LIBRARY)
+        with pytest.raises(ValueError, match="library -> staging"):
+            engine.validate_transition(LibraryZone.LIBRARY, LibraryZone.STAGING)
 
 
 class TestDestinationPath:

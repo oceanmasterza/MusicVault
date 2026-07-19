@@ -99,6 +99,11 @@ class ScannerWorker:
             ):
                 return  # unchanged — hash/fingerprint/metadata can all be skipped
 
+        # Watch rescans every ~30s; don't stack duplicate hash jobs for the same track.
+        if self._job_queue.has_active_for_track(JobType.HASH_FILE, job.library_id, track_id):
+            return
+
+        tech = _probe_audio_tech(path)
         track = _build_track(
             existing,
             track_id=track_id,
@@ -107,6 +112,7 @@ class ScannerWorker:
             path=path,
             file_size=stat.st_size,
             file_modified=file_modified,
+            tech=tech,
         )
         self._writer.submit(
             WriteDTO(table="tracks", operation="upsert", rows=[TrackRepository.to_row(track)])
@@ -134,6 +140,7 @@ def _build_track(
     path: Path,
     file_size: int,
     file_modified: datetime,
+    tech: dict[str, object] | None = None,
 ) -> Track:
     """A brand-new file gets a fresh `Track`; a re-scanned known file
     keeps every previously arbitrated field (title, artist, quality
@@ -143,15 +150,19 @@ def _build_track(
     here would erase metadata a later phase's MetadataWorker already
     filled in.
     """
+    tech = tech or {}
     if existing is not None:
-        return replace(
-            existing,
-            file_path=str(path),
-            file_name=path.name,
-            file_size=file_size,
-            file_modified=file_modified,
-            updated_at=datetime.now(UTC),
-        )
+        updates: dict[str, object] = {
+            "file_path": str(path),
+            "file_name": path.name,
+            "file_size": file_size,
+            "file_modified": file_modified,
+            "updated_at": datetime.now(UTC),
+        }
+        for key, value in tech.items():
+            if value is not None and getattr(existing, key, None) is None:
+                updates[key] = value
+        return replace(existing, **updates)  # type: ignore[arg-type]
     now = datetime.now(UTC)
     return Track(
         id=track_id,
@@ -163,4 +174,47 @@ def _build_track(
         file_modified=file_modified,
         created_at=now,
         updated_at=now,
+        duration_ms=tech.get("duration_ms") if isinstance(tech.get("duration_ms"), int) else None,
+        bitrate=tech.get("bitrate") if isinstance(tech.get("bitrate"), int) else None,
+        sample_rate=tech.get("sample_rate") if isinstance(tech.get("sample_rate"), int) else None,
+        channels=tech.get("channels") if isinstance(tech.get("channels"), int) else None,
+        bit_depth=tech.get("bit_depth") if isinstance(tech.get("bit_depth"), int) else None,
+        codec=tech.get("codec") if isinstance(tech.get("codec"), str) else None,
+        is_lossless=bool(tech.get("is_lossless", False)),
     )
+
+
+def _probe_audio_tech(path: Path) -> dict[str, object]:
+    """Read container/codec technical fields via Mutagen (local — no network)."""
+    try:
+        from mutagen import File as MutagenFile
+    except ImportError:
+        return {}
+    try:
+        audio = MutagenFile(path)
+    except Exception:
+        return {}
+    if audio is None or getattr(audio, "info", None) is None:
+        return {}
+    info = audio.info
+    out: dict[str, object] = {}
+    length = getattr(info, "length", None)
+    if isinstance(length, (int, float)) and length > 0:
+        out["duration_ms"] = int(round(float(length) * 1000))
+    bitrate = getattr(info, "bitrate", None)
+    if isinstance(bitrate, (int, float)) and bitrate > 0:
+        out["bitrate"] = int(bitrate)
+    sample_rate = getattr(info, "sample_rate", None)
+    if isinstance(sample_rate, (int, float)) and sample_rate > 0:
+        out["sample_rate"] = int(sample_rate)
+    channels = getattr(info, "channels", None)
+    if isinstance(channels, int) and channels > 0:
+        out["channels"] = channels
+    bits = getattr(info, "bits_per_sample", None) or getattr(info, "bit_depth", None)
+    if isinstance(bits, int) and bits > 0:
+        out["bit_depth"] = bits
+    suffix = path.suffix.lower().lstrip(".")
+    if suffix:
+        out["codec"] = suffix
+    out["is_lossless"] = suffix in {"flac", "wav", "aiff", "aif", "wv", "ape"}
+    return out

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 import threading
-from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import Executor, Future, ProcessPoolExecutor, ThreadPoolExecutor
 from typing import Any
 
 from loguru import logger
@@ -95,9 +95,12 @@ class JobDispatcher:
         self._scan_pool = ThreadPoolExecutor(
             max_workers=self._scan_max, thread_name_prefix="musicvault-scan"
         )
-        # Shared CPU ProcessPool for hash_file and fingerprint_file —
-        # both are Tier 1 CPU-bound work (08-performance.md).
-        self._cpu_pool = ProcessPoolExecutor(max_workers=hash_processes)
+        # Shared CPU pool for hash_file and fingerprint_file.
+        # Frozen Windows builds use threads — ProcessPoolExecutor relaunches
+        # MusicVault.exe per worker and flashes console windows; threads keep
+        # work in-process (fpcalc itself is hidden via CREATE_NO_WINDOW).
+        self._cpu_pool: Executor | None = None
+        self._cpu_pool_workers = hash_processes
         # Dedicated I/O ThreadPool for identify_metadata + evaluate_rules
         # (Tier 2). Kept separate from scan so slow HTTP cannot starve
         # directory walks.
@@ -223,6 +226,23 @@ class JobDispatcher:
 
         return self._metadata_pool.submit(_run)
 
+    def _ensure_cpu_pool(self) -> Executor:
+        if self._cpu_pool is None:
+            import sys
+
+            workers = self._cpu_pool_workers
+            frozen = getattr(sys, "frozen", False)
+            # Prefer threads on frozen Windows: no per-song EXE spawn / console flash.
+            if frozen and sys.platform == "win32":
+                capped = min(4, os.cpu_count() or 1)
+                workers = capped if workers is None else min(max(1, workers), capped)
+                self._cpu_pool = ThreadPoolExecutor(
+                    max_workers=workers, thread_name_prefix="musicvault-cpu"
+                )
+            else:
+                self._cpu_pool = ProcessPoolExecutor(max_workers=workers)
+        return self._cpu_pool
+
     def _submit_cpu(
         self,
         job: Job,
@@ -230,7 +250,7 @@ class JobDispatcher:
         callback: Any,
     ) -> Future[Any]:
         self._bump_inflight("cpu", 1)
-        future = self._cpu_pool.submit(compute, job.payload)
+        future = self._ensure_cpu_pool().submit(compute, job.payload)
 
         def _on_done(done: Future[dict[str, Any]]) -> None:
             try:
@@ -255,7 +275,8 @@ class JobDispatcher:
         if self._thread is not None:
             self._thread.join(timeout=timeout)
         self._scan_pool.shutdown(wait=True)
-        self._cpu_pool.shutdown(wait=True)
+        if self._cpu_pool is not None:
+            self._cpu_pool.shutdown(wait=True)
         self._metadata_pool.shutdown(wait=True)
 
     def _poll_loop(self) -> None:

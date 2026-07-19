@@ -4,27 +4,17 @@ Pure (no I/O): validates zone transitions and computes where a track's
 file belongs under a zone root. The actual filesystem move lives in
 :class:`~musicvault.workers.io.organizer_worker.OrganizerWorker`.
 
-**Zone transitions** follow the state diagram in
-docs/architecture/10-revision-v2.md (incoming → staging, staging →
-library, staging → incoming, library → archive, archive → library),
-*plus* incoming → archive and staging → archive as an implementation
-extension: the shipped "Archive MP3 when FLAC exists" rule fires on
-tracks that are still in incoming/staging, and forbidding those
-transitions would make the rule unactionable until the track reached
-the library.
+**Zone policy (in-place processing):** originals stay in *incoming* through
+hash → fingerprint → identify → rules. The first physical move is either:
 
-**Naming template**: no folder-structure template syntax is documented
-anywhere (called out as a gap in the Phase 3 roadmap notes), so this is
-the implementation's own documented default, applied to the staging /
-library / archive zones:
+- incoming → **library** when identity is confirmed (auto-approve), or
+- incoming → **library** after Review approval, or
+- incoming → **archive** when a rule explicitly archives a loser.
 
-    {Artist}/{Year} - {Album}/{NN} - {Title}{ext}
-
-with graceful degradation when fields are missing (no album → no album
-folder; no title → keep the original filename) and Windows-safe
-component sanitization. Moves *to incoming* (rejected re-process) keep
-the flat original filename. A configurable template language is a
-later-phase concern.
+*Staging* remains available for manual/legacy holding and rejected
+re-process (staging → incoming), but the default pipeline no longer moves
+there early. Allowed transitions also keep staging → library for tracks
+already sitting in staging from older runs.
 """
 
 from __future__ import annotations
@@ -36,7 +26,9 @@ from musicvault.models.entities.library import Library
 from musicvault.models.entities.track import LibraryZone, Track
 
 ALLOWED_TRANSITIONS: dict[LibraryZone, frozenset[LibraryZone]] = {
-    LibraryZone.INCOMING: frozenset({LibraryZone.STAGING, LibraryZone.ARCHIVE}),
+    LibraryZone.INCOMING: frozenset(
+        {LibraryZone.LIBRARY, LibraryZone.STAGING, LibraryZone.ARCHIVE}
+    ),
     LibraryZone.STAGING: frozenset(
         {LibraryZone.LIBRARY, LibraryZone.INCOMING, LibraryZone.ARCHIVE}
     ),

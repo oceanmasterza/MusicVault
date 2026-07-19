@@ -160,6 +160,39 @@ class TrackRepository:
             "quality_buckets": buckets,
         }
 
+    def confidence_distribution(self, library_id: UUID) -> dict[str, int]:
+        """Bucket tracks by ``overall_confidence`` for the Dashboard.
+
+        Buckets:
+          ``unscored`` — null confidence (not yet identified)
+          ``low`` — ``< 0.50``
+          ``fair`` — ``0.50`` inclusive to ``< 0.90``
+          ``high`` — ``>= 0.90`` (auto-approve territory)
+          ``flagged`` — ``needs_review`` is true (may overlap other buckets)
+        """
+        lib = uuid_to_blob(library_id)
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(
+                    tracks_table.c.overall_confidence,
+                    tracks_table.c.needs_review,
+                ).where(tracks_table.c.library_id == lib)
+            ).all()
+
+        buckets = {"unscored": 0, "low": 0, "fair": 0, "high": 0, "flagged": 0}
+        for confidence, needs_review in rows:
+            if needs_review:
+                buckets["flagged"] += 1
+            if confidence is None:
+                buckets["unscored"] += 1
+            elif float(confidence) < 0.50:
+                buckets["low"] += 1
+            elif float(confidence) < 0.90:
+                buckets["fair"] += 1
+            else:
+                buckets["high"] += 1
+        return buckets
+
     def update_zone(self, track_id: UUID, zone: LibraryZone) -> None:
         with self._engine.begin() as conn:
             conn.execute(
